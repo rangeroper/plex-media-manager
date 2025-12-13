@@ -1,0 +1,42 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: plex-poster-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  sd-api:
+    build: ./sd-api
+    container_name: sd-api
+    ports:
+      - "8001:8000"  # Host port 8001 → container port 8000
+    volumes:
+      - ./sd-api/models:/root/.cache/huggingface/hub
+      - ./sd-api/outputs:/app/outputs
+
+  app:
+    build: ./plex-poster-app
+    container_name: plex-poster-app
+    ports:
+      - "3000:3000"
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - SD_API_URL=http://sd-api:8000  # still points to container port
+    volumes:
+      - ./plex-poster-app/data:/app/data
+      - ./plex-poster-app/uploads:/app/uploads
+    depends_on:
+      - redis
+      - sd-api
+
+volumes:
+  redis-data:

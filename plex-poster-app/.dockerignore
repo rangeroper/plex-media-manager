@@ -1,0 +1,35 @@
+# Dependencies
+node_modules
+.pnpm-store
+.yarn
+
+# Build artifacts
+dist
+build
+.next
+out
+
+# Environment / secrets
+.env
+.env.*
+*.pem
+
+# Git
+.git
+.gitignore
+
+# Logs
+*.log
+logs
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode
+.idea
+
+# Docs / misc
+README.md
+
+# Data
+/data
