@@ -111,7 +111,7 @@ async function processQueue(jobId: string): Promise<void> {
         )
         if (modelsResponse.ok) {
           const modelsData = await modelsResponse.json()
-          const modelExists = modelsData.models.some((m: any) => m.id === job.model && m.downloaded)
+          const modelExists = modelsData.models.some((m: any) => m.key === job.model && m.downloaded)
 
           if (!modelExists) {
             console.log(`[Worker] Model ${job.model} not downloaded, downloading now...`)
@@ -120,7 +120,7 @@ async function processQueue(jobId: string): Promise<void> {
               {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ model: job.model }), // Changed from modelId to model
+                body: JSON.stringify({ model: job.model }),
               },
             )
 
@@ -132,27 +132,38 @@ async function processQueue(jobId: string): Promise<void> {
               )
             }
 
-            console.log(`[Worker] Model ${job.model} download initiated`)
-            // Wait for download to complete (poll status)
-            let downloaded = false
-            let attempts = 0
-            while (!downloaded && attempts < 60) {
-              // 5 minutes max
-              await sleep(5000)
-              const checkResponse = await fetch(
-                `${process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000"}/api/sd/models`,
-              )
-              if (checkResponse.ok) {
-                const checkData = await checkResponse.json()
-                downloaded = checkData.models.some((m: any) => m.id === job.model && m.downloaded)
-              }
-              attempts++
-            }
+            const downloadResult = await downloadResponse.json()
+            console.log(`[Worker] Model ${job.model} download response:`, downloadResult)
 
-            if (!downloaded) {
-              throw new Error(`Model ${job.model} download timed out`)
+            // If already downloaded, skip waiting
+            if (downloadResult.already_downloaded) {
+              console.log(`[Worker] Model ${job.model} was already downloaded`)
+            } else {
+              console.log(`[Worker] Model ${job.model} download in progress, waiting for completion...`)
+              // Wait for download to complete (poll status)
+              let downloaded = false
+              let attempts = 0
+              while (!downloaded && attempts < 120) {
+                // 10 minutes max (large models take time)
+                await sleep(5000)
+                const checkResponse = await fetch(
+                  `${process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000"}/api/sd/models`,
+                )
+                if (checkResponse.ok) {
+                  const checkData = await checkResponse.json()
+                  downloaded = checkData.models.some((m: any) => m.key === job.model && m.downloaded)
+                  if (!downloaded) {
+                    console.log(`[Worker] Still downloading... (attempt ${attempts + 1}/120, checking again in 5s)`)
+                  }
+                }
+                attempts++
+              }
+
+              if (!downloaded) {
+                throw new Error(`Model ${job.model} download timed out after 10 minutes`)
+              }
+              console.log(`[Worker] Model ${job.model} successfully downloaded`)
             }
-            console.log(`[Worker] Model ${job.model} successfully downloaded`)
           } else {
             console.log(`[Worker] Model ${job.model} is already downloaded`)
           }

@@ -22,6 +22,19 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: error.error || "Failed to download model" }, { status: response.status })
     }
 
+    const contentType = response.headers.get("content-type")
+    if (contentType?.includes("text/event-stream")) {
+      // Forward the SSE stream to the client
+      return new NextResponse(response.body, {
+        headers: {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+        },
+      })
+    }
+
+    // Fallback for non-streaming response (already downloaded case)
     const data = await response.json()
     return NextResponse.json(data)
   } catch (error) {

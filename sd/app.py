@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, send_file
+from flask import Flask, request, jsonify, send_file, Response
 from diffusers import StableDiffusionXLPipeline, StableDiffusion3Pipeline, DiffusionPipeline
 import torch
 import os
@@ -7,6 +7,8 @@ from datetime import datetime
 import logging
 import time
 import gc
+import json
+from huggingface_hub import snapshot_download
 
 # Configure logging
 logging.basicConfig(
@@ -346,7 +348,7 @@ def list_models():
 
 @app.route('/models/download', methods=['POST'])
 def download_model():
-    """Download a model to local storage"""
+    """Download a model to local storage with progress streaming"""
     try:
         data = request.json
         model_key = data.get('model')
@@ -368,52 +370,68 @@ def download_model():
         logger.info(f"📥 Starting download for model: {model_key}")
         logger.info(f"🔗 Model ID: {model_config['id']}")
         logger.info(f"📂 Target directory: {model_dir}")
-        logger.info("⏳ This may take several minutes...")
         logger.info("=" * 80)
         
-        start_time = time.time()
+        def generate_progress():
+            """Generator function for SSE progress updates"""
+            try:
+                start_time = time.time()
+                
+                # Send initial progress
+                yield f"data: {json.dumps({'status': 'starting', 'progress': 0, 'message': f'Initializing download for {model_key}...'})}\n\n"
+                
+                # Get HuggingFace token if required
+                hf_token = os.environ.get("HUGGINGFACE_TOKEN") if model_config['requires_auth'] else None
+                
+                yield f"data: {json.dumps({'status': 'downloading', 'progress': 10, 'message': 'Downloading model files from HuggingFace...'})}\n\n"
+                
+                def progress_callback(progress_info):
+                    # This is called periodically during download
+                    pass  # Progress info from HF is complex, we'll simulate progress
+                
+                # Download model files using snapshot_download
+                logger.info(f"⏳ Downloading model files...")
+                snapshot_download(
+                    repo_id=model_config['id'],
+                    local_dir=model_dir,
+                    token=hf_token,
+                    local_dir_use_symlinks=False
+                )
+                
+                yield f"data: {json.dumps({'status': 'downloading', 'progress': 70, 'message': 'Model files downloaded, initializing pipeline...'})}\n\n"
+                
+                # Verify the download by loading the pipeline
+                logger.info(f"✓ Verifying downloaded model...")
+                if model_config['class'] == 'StableDiffusion3Pipeline':
+                    pipeline = StableDiffusion3Pipeline.from_pretrained(model_dir, torch_dtype=torch.float16)
+                elif model_config['class'] == 'StableDiffusionXLPipeline':
+                    pipeline = StableDiffusionXLPipeline.from_pretrained(model_dir, torch_dtype=torch.float16)
+                else:
+                    pipeline = DiffusionPipeline.from_pretrained(model_dir, torch_dtype=torch.float16)
+                
+                yield f"data: {json.dumps({'status': 'saving', 'progress': 90, 'message': 'Finalizing model installation...'})}\n\n"
+                
+                # Clean up pipeline from memory (don't keep it loaded)
+                del pipeline
+                gc.collect()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                
+                download_time = time.time() - start_time
+                
+                logger.info("=" * 80)
+                logger.info(f"✅ Model {model_key} downloaded successfully in {download_time:.2f}s")
+                logger.info(f"📂 Saved to: {model_dir}")
+                logger.info("=" * 80)
+                
+                # Send completion
+                yield f"data: {json.dumps({'status': 'complete', 'progress': 100, 'message': f'Model {model_key} downloaded successfully', 'download_time': round(download_time, 2)})}\n\n"
+                
+            except Exception as e:
+                logger.error(f"❌ Error during download: {e}")
+                yield f"data: {json.dumps({'status': 'error', 'progress': 0, 'message': str(e)})}\n\n"
         
-        # Get HuggingFace token if required
-        hf_token = os.environ.get("HUGGINGFACE_TOKEN") if model_config['requires_auth'] else None
-        
-        # Download based on pipeline class
-        if model_config['class'] == 'StableDiffusion3Pipeline':
-            pipeline = StableDiffusion3Pipeline.from_pretrained(
-                model_config['id'],
-                token=hf_token
-            )
-        elif model_config['class'] == 'StableDiffusionXLPipeline':
-            pipeline = StableDiffusionXLPipeline.from_pretrained(
-                model_config['id'],
-                token=hf_token
-            )
-        else:
-            pipeline = DiffusionPipeline.from_pretrained(
-                model_config['id'],
-                token=hf_token
-            )
-        
-        # Save to local directory
-        pipeline.save_pretrained(model_dir)
-        
-        # Clean up pipeline from memory (don't keep it loaded)
-        del pipeline
-        gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-        
-        download_time = time.time() - start_time
-        
-        logger.info("=" * 80)
-        logger.info(f"✅ Model {model_key} downloaded successfully in {download_time:.2f}s")
-        logger.info(f"📂 Saved to: {model_dir}")
-        logger.info("=" * 80)
-        
-        return jsonify({
-            'success': True,
-            'message': f'Model {model_key} downloaded successfully',
-            'download_time': round(download_time, 2)
-        })
+        return Response(generate_progress(), mimetype='text/event-stream')
         
     except Exception as e:
         logger.error(f"❌ Error downloading model: {e}")

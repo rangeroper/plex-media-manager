@@ -23,6 +23,7 @@ interface ModelsResponse {
 interface DownloadState {
   modelKey: string
   status: "downloading" | "complete" | "error"
+  progress?: number // Added progress field for streaming updates
   message?: string
 }
 
@@ -119,7 +120,7 @@ export function ModelsView() {
     try {
       setDownloadStates((prev) => ({
         ...prev,
-        [modelKey]: { modelKey, status: "downloading" },
+        [modelKey]: { modelKey, status: "downloading", progress: 0 },
       }))
       setError(null)
 
@@ -134,20 +135,75 @@ export function ModelsView() {
         throw new Error(data.error || "Failed to download model")
       }
 
-      setDownloadStates((prev) => ({
-        ...prev,
-        [modelKey]: { modelKey, status: "complete" },
-      }))
+      const contentType = response.headers.get("content-type")
 
-      await fetchModels()
+      // Check if it's a streaming response
+      if (contentType?.includes("text/event-stream")) {
+        const reader = response.body?.getReader()
+        const decoder = new TextDecoder()
 
-      setTimeout(() => {
-        setDownloadStates((prev) => {
-          const updated = { ...prev }
-          delete updated[modelKey]
-          return updated
-        })
-      }, 3000)
+        if (!reader) {
+          throw new Error("Failed to read stream")
+        }
+
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+
+          const chunk = decoder.decode(value)
+          const lines = chunk.split("\n")
+
+          for (const line of lines) {
+            if (line.startsWith("data: ")) {
+              try {
+                const data = JSON.parse(line.slice(6))
+
+                setDownloadStates((prev) => ({
+                  ...prev,
+                  [modelKey]: {
+                    modelKey,
+                    status: data.status === "complete" ? "complete" : "downloading",
+                    progress: data.progress || 0,
+                    message: data.message,
+                  },
+                }))
+
+                if (data.status === "complete") {
+                  await fetchModels()
+                  setTimeout(() => {
+                    setDownloadStates((prev) => {
+                      const updated = { ...prev }
+                      delete updated[modelKey]
+                      return updated
+                    })
+                  }, 3000)
+                } else if (data.status === "error") {
+                  throw new Error(data.message || "Download failed")
+                }
+              } catch (parseError) {
+                console.error("Failed to parse SSE data:", parseError)
+              }
+            }
+          }
+        }
+      } else {
+        // Non-streaming response (already downloaded case)
+        const data = await response.json()
+        setDownloadStates((prev) => ({
+          ...prev,
+          [modelKey]: { modelKey, status: "complete", progress: 100 },
+        }))
+
+        await fetchModels()
+
+        setTimeout(() => {
+          setDownloadStates((prev) => {
+            const updated = { ...prev }
+            delete updated[modelKey]
+            return updated
+          })
+        }, 3000)
+      }
     } catch (err) {
       console.error("Error downloading model:", err)
       const errorMsg = err instanceof Error ? err.message : "Failed to download model"
@@ -155,7 +211,7 @@ export function ModelsView() {
 
       setDownloadStates((prev) => ({
         ...prev,
-        [modelKey]: { modelKey, status: "error", message: errorMsg },
+        [modelKey]: { modelKey, status: "error", message: errorMsg, progress: 0 },
       }))
     }
   }
@@ -284,7 +340,7 @@ export function ModelsView() {
                       {isDownloading ? (
                         <Badge variant="secondary" className="gap-1">
                           <RefreshCw className="h-3 w-3 animate-spin" />
-                          Downloading...
+                          Downloading... {downloadState.progress !== undefined ? `${downloadState.progress}%` : ""}
                         </Badge>
                       ) : model.downloaded ? (
                         <Badge variant="default" className="gap-1">
@@ -312,6 +368,9 @@ export function ModelsView() {
                     </div>
                   </div>
                   <p className="text-sm text-muted-foreground mb-2">{MODEL_DESCRIPTIONS[model.key] || ""}</p>
+                  {isDownloading && downloadState.message && (
+                    <p className="text-xs text-muted-foreground mb-2">{downloadState.message}</p>
+                  )}
                   <p className="text-xs text-muted-foreground">Model ID: {model.id}</p>
                   {model.requires_auth && !model.downloaded && (
                     <p className="text-xs text-amber-600 dark:text-amber-500 mt-2">
