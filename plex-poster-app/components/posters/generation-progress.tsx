@@ -2,14 +2,18 @@ import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Progress } from "@/components/ui/progress"
 import { Badge } from "@/components/ui/badge"
-import { X, Loader2, CheckCircle2 } from "lucide-react"
+import { X, Loader2, CheckCircle2, Pause, Play } from "lucide-react"
+import { usePosterJobControl } from "@/hooks/usePosterJobs"
 
 interface GenerationTask {
   id: string
   libraryTitle: string
-  status: 'pending' | 'running' | 'completed' | 'paused' | 'error'
+  status: 'pending' | 'running' | 'completed' | 'paused' | 'failed'
   totalItems: number
-  processedItems: number
+  completedItems: number
+  failedItems: number
+  currentItem?: string
+  progress: number
   provider: 'stable-diffusion' | 'fanart' | 'tmdb' | 'imdb'
 }
 
@@ -26,13 +30,31 @@ export function GenerationProgress({
 }: GenerationProgressProps) {
   const getTotalProgress = () => {
     if (tasks.length === 0) return 0
-    const totalItems = tasks.reduce((sum, t) => sum + t.totalItems, 0)
-    const processedItems = tasks.reduce((sum, t) => sum + t.processedItems, 0)
-    return Math.round((processedItems / totalItems) * 100)
+    return Math.round(
+      tasks.reduce((sum, t) => sum + t.progress, 0) / tasks.length
+    )
   }
 
   const getActiveTask = () => tasks.find((t) => t.status === 'running')
   const activeTask = getActiveTask()
+  const firstTask = tasks[0]
+
+  // Control for the first task (or could be active task)
+  const { pauseJob, resumeJob, isControlling } = usePosterJobControl(firstTask?.id || '')
+
+  const handlePauseResume = async () => {
+    if (!firstTask) return
+
+    try {
+      if (firstTask.status === 'running') {
+        await pauseJob()
+      } else if (firstTask.status === 'paused') {
+        await resumeJob()
+      }
+    } catch (error) {
+      console.error('Failed to control job:', error)
+    }
+  }
 
   const getProviderLabel = (provider: string) => {
     const labels: Record<string, string> = {
@@ -43,6 +65,10 @@ export function GenerationProgress({
     }
     return labels[provider] || provider
   }
+
+  const totalCompleted = tasks.reduce((sum, t) => sum + t.completedItems, 0)
+  const totalFailed = tasks.reduce((sum, t) => sum + t.failedItems, 0)
+  const totalItems = tasks.reduce((sum, t) => sum + t.totalItems, 0)
 
   return (
     <div className="fixed bottom-6 right-6 w-80 z-50">
@@ -69,6 +95,12 @@ export function GenerationProgress({
                   </Badge>
                 </div>
               )}
+
+              {activeTask?.currentItem && (
+                <p className="text-xs text-muted-foreground truncate">
+                  Current: {activeTask.currentItem}
+                </p>
+              )}
             </div>
 
             <Button
@@ -89,22 +121,42 @@ export function GenerationProgress({
             <Progress value={getTotalProgress()} className="h-2" />
           </div>
 
-          <div className="flex items-center justify-between pt-2 border-t">
-            <p className="text-xs text-muted-foreground">
-              {tasks.filter((t) => t.status === 'completed').length} / {tasks.length} libraries
-            </p>
+          <div className="flex items-center justify-between pt-2 border-t text-xs">
+            <div className="space-y-0.5">
+              <p className="text-muted-foreground">
+                {totalCompleted} / {totalItems} items completed
+              </p>
+              {totalFailed > 0 && (
+                <p className="text-destructive">
+                  {totalFailed} failed
+                </p>
+              )}
+              <p className="text-muted-foreground">
+                {tasks.filter((t) => t.status === 'completed').length} / {tasks.length} libraries
+              </p>
+            </div>
 
-            {/* SD jobs cannot be paused, so hide Pause/Resume */}
-            {!tasks.some(t => t.provider === 'stable-diffusion') && (
-              isGenerating ? (
-                <Button variant="ghost" size="sm" className="h-7 text-xs">
-                  Pause
-                </Button>
-              ) : tasks.some(t => t.status === 'paused') ? (
-                <Button variant="ghost" size="sm" className="h-7 text-xs">
-                  Resume
-                </Button>
-              ) : null
+            {/* Pause/Resume button for SD jobs */}
+            {firstTask && (firstTask.status === 'running' || firstTask.status === 'paused') && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 text-xs gap-1"
+                onClick={handlePauseResume}
+                disabled={isControlling}
+              >
+                {firstTask.status === 'running' ? (
+                  <>
+                    <Pause className="h-3 w-3" />
+                    Pause
+                  </>
+                ) : (
+                  <>
+                    <Play className="h-3 w-3" />
+                    Resume
+                  </>
+                )}
+              </Button>
             )}
           </div>
         </div>

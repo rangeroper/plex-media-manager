@@ -1,18 +1,18 @@
 # =========================
 # Dependencies
 # =========================
-node_modules/
-.pnpm-store/
-.yarn/
-.yarn-cache/
+/plex-poster-app/node_modules/
+/plex-poster-app/.pnpm-store/
+/plex-poster-app/.yarn/
+/plex-poster-app/.yarn-cache/
 
 # =========================
 # Build output
 # =========================
-dist/
-build/
-.next/
-out/
+/plex-poster-app/dist/
+/plex-poster-app/build/
+/plex-poster-app/.next/
+/plex-poster-app/out/
 
 # =========================
 # Environment variables
@@ -26,23 +26,23 @@ out/
 # =========================
 # Logs
 # =========================
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
-logs/
-*.log
+/plex-poster-app/npm-debug.log*
+/plex-poster-app/yarn-debug.log*
+/plex-poster-app/yarn-error.log*
+/plex-poster-app/pnpm-debug.log*
+/plex-poster-app/logs/
+/plex-poster-app/*.log
 
 # =========================
 # OS / Editor junk
 # =========================
-.DS_Store
-Thumbs.db
-*.swp
-*.swo
-.idea/
-.vscode/
-*.iml
+/plex-poster-app/.DS_Store
+/plex-poster-app/Thumbs.db
+/plex-poster-app/*.swp
+/plex-poster-app/*.swo
+/plex-poster-app/.idea/
+/plex-poster-app/.vscode/
+/plex-poster-app/*.iml
 
 # =========================
 # Docker
@@ -52,9 +52,9 @@ docker-compose.override.yml
 # =========================
 # Misc
 # =========================
-coverage/
-.cache/
-.eslintcache
+/plex-poster-app/coverage/
+/plex-poster-app/.cache/
+/plex-poster-app/.eslintcache
 
 # =========================
 # Data

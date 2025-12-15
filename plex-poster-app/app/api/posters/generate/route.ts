@@ -1,16 +1,23 @@
 // app/api/posters/generate/route.ts
 import { NextRequest, NextResponse } from "next/server"
 import { cache } from "@/lib/redis-cache"
-import { v4 as uuidv4 } from "uuid"
-import { createPosterJob, runPosterJob } from "@/lib/posters/stable-diffusion/worker"
+import { createPosterJob } from "@/lib/posters/queue"
+import { startWorker } from "@/lib/posters/worker"
 
 export const dynamic = "force-dynamic"
 
 interface PlexItem {
   ratingKey: string
   title?: string
+  year?: number
   type?: string
   [key: string]: any
+}
+
+interface RedisLibraryData {
+  items: PlexItem[]
+  connectedUrl: string
+  totalSize: number
 }
 
 export async function POST(request: NextRequest) {
@@ -22,46 +29,68 @@ export async function POST(request: NextRequest) {
     
     const { libraryKey, provider, model, style, serverId = "default" } = body
 
-    if (!libraryKey || !provider || !model || !style) {
-      console.error("[API] Missing required parameters:", { libraryKey, provider, model, style })
+    if (!libraryKey || !provider) {
+      console.error("[API] Missing required parameters:", { libraryKey, provider })
       return NextResponse.json(
         { error: "Missing required parameters" },
         { status: 400 }
       )
     }
 
-    // 1. Try to fetch items from Redis using the correct key format
-    // Format: items:serverId:libraryKey:offset:limit
+    // Use defaults for model and style if not provided
+    const finalModel = model || "sdxl-turbo"
+    const finalStyle = style || "cinematic"
+
+    // 1. Fetch items from Redis
     const redisKey = `items:${serverId}:${libraryKey}:0:100`
     console.log(`[API] Looking for Redis key: ${redisKey}`)
     
-    let rawItems = (await cache.get(redisKey)) as string | null
+    let rawData = await cache.get(redisKey)
     
-    // Fallback: try without pagination
-    if (!rawItems) {
+    // Fallback keys
+    if (!rawData) {
       const fallbackKey = `items:${serverId}:${libraryKey}`
       console.log(`[API] Trying fallback key: ${fallbackKey}`)
-      rawItems = (await cache.get(fallbackKey)) as string | null
+      rawData = await cache.get(fallbackKey)
     }
     
-    // Fallback: try simple key
-    if (!rawItems) {
+    if (!rawData) {
       const simpleKey = `items:${libraryKey}`
       console.log(`[API] Trying simple key: ${simpleKey}`)
-      rawItems = (await cache.get(simpleKey)) as string | null
+      rawData = await cache.get(simpleKey)
     }
     
-    if (!rawItems) {
+    if (!rawData) {
       console.error(`[API] No items found in Redis for library ${libraryKey}`)
-      console.error(`[API] Tried keys: ${redisKey}, items:${serverId}:${libraryKey}, items:${libraryKey}`)
       return NextResponse.json(
         { error: `No items found in Redis for library ${libraryKey}. Please load the library first.` },
         { status: 404 }
       )
     }
 
-    const items: PlexItem[] = JSON.parse(rawItems)
-    console.log(`[API] Found ${items.length} items in library`)
+    // Parse the data
+    let libraryData: RedisLibraryData
+    
+    if (typeof rawData === 'string') {
+      console.log('[API] Parsing data from JSON string')
+      libraryData = JSON.parse(rawData)
+    } else {
+      console.log('[API] Data already parsed as object')
+      libraryData = rawData as RedisLibraryData
+    }
+
+    // Extract items array
+    const items = libraryData.items
+    
+    if (!Array.isArray(items)) {
+      console.error('[API] Items is not an array:', typeof items)
+      return NextResponse.json(
+        { error: 'Invalid data format: items is not an array' },
+        { status: 500 }
+      )
+    }
+
+    console.log(`[API] Found ${items.length} items in library (totalSize: ${libraryData.totalSize})`)
 
     if (!items.length) {
       return NextResponse.json(
@@ -70,49 +99,48 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // 2. Create a master job ID for tracking this library's generation
-    const masterJobId = uuidv4()
-    console.log(`[API] Created master job: ${masterJobId}`)
-
-    // 3. Create individual poster jobs for each item
-    const individualJobs = []
+    // Validate items have required fields
+    const validItems = items.filter(item => item && item.ratingKey)
     
-    for (const item of items) {
-      const job = await createPosterJob(
-        libraryKey,
-        item.ratingKey,
-        model,
-        style
-      )
-
-      individualJobs.push(job.jobId)
-      console.log(`[API] Created job ${job.jobId} for item ${item.ratingKey} (${item.title || 'unknown'})`)
-
-      // Fire-and-forget the job runner
-      runPosterJob(job).catch(err =>
-        console.error(`[Worker] Job ${job.jobId} failed:`, err)
+    if (validItems.length === 0) {
+      console.error('[API] No valid items with ratingKey found')
+      return NextResponse.json(
+        { error: 'No valid items found in library data' },
+        { status: 500 }
       )
     }
 
-    // 4. Create a master job tracker for the UI
-    const masterJob = {
-      jobId: masterJobId,
+    if (validItems.length < items.length) {
+      console.warn(`[API] ${items.length - validItems.length} items missing ratingKey`)
+    }
+
+    console.log(`[API] Creating job for ${validItems.length} valid items`)
+
+    // 2. Create job and enqueue all items
+    const job = await createPosterJob(
       libraryKey,
-      status: "running",
-      totalItems: items.length,
-      processedItems: 0,
-      createdAt: new Date().toISOString(),
-      individualJobs,
-    }
+      validItems.map(item => ({
+        ratingKey: item.ratingKey,
+        title: item.title,
+        year: item.year?.toString(),
+        type: item.type,
+      })),
+      finalModel,
+      finalStyle
+    )
 
-    await cache.set(`job:${masterJobId}`, JSON.stringify(masterJob))
-    console.log(`[API] Saved master job to Redis`)
+    console.log(`[API] Created job ${job.jobId} with ${validItems.length} items`)
 
-    // 5. Return the master jobId for UI polling
+    // 3. Start worker (fire-and-forget)
+    startWorker(job.jobId).catch(err =>
+      console.error(`[Worker] Failed to start worker for job ${job.jobId}:`, err)
+    )
+
+    // 4. Return job info
     return NextResponse.json({
-      jobId: masterJobId,
-      total: items.length,
-      message: `Started generation for ${items.length} items`,
+      jobId: job.jobId,
+      total: validItems.length,
+      message: `Started generation for ${validItems.length} items`,
     })
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
@@ -124,7 +152,6 @@ export async function POST(request: NextRequest) {
   }
 }
 
-// Optional: Add GET to check if route exists
 export async function GET() {
   return NextResponse.json({ 
     status: "ok",

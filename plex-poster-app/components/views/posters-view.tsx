@@ -6,6 +6,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { StableDiffusionProvider } from "../posters/ai/stable-diffusion/stable-diffusion-provider"
+import { usePosterJobs } from "@/hooks/usePosterJobs"
 
 interface Library {
   key: string
@@ -18,10 +19,12 @@ interface GenerationTask {
   jobId?: string
   libraryKey: string
   libraryTitle: string
-  status: "pending" | "running" | "completed" | "paused" | "error"
+  status: "pending" | "running" | "completed" | "paused" | "failed"
   totalItems: number
-  processedItems: number
+  completedItems: number
+  failedItems: number
   currentItem?: string
+  progress: number
   startedAt?: string
   completedAt?: string
   provider: "stable-diffusion" | "fanart" | "tmdb" | "imdb"
@@ -41,10 +44,12 @@ export function PostersView({
   libraries = [],
 }: PostersViewProps) {
   const [isLoading, setIsLoading] = useState(false)
-  const [tasks, setTasks] = useState<GenerationTask[]>([])
-  const [isGenerating, setIsGenerating] = useState(false)
-  const [showProgress, setShowProgress] = useState(false)
+  const [activeJobIds, setActiveJobIds] = useState<string[]>([])
   const [activeProviders, setActiveProviders] = useState<Record<string, ProviderType>>({})
+  const [libraryJobMap, setLibraryJobMap] = useState<Record<string, string>>({})
+
+  // Use the poster jobs hook
+  const { tasks, isGenerating, totalProgress, totalCompleted, totalFailed } = usePosterJobs(activeJobIds)
 
   const hasStableDiffusionSelected = Object.values(activeProviders).includes("stable-diffusion")
 
@@ -56,7 +61,7 @@ export function PostersView({
 
       for (const library of libraries) {
         try {
-          const res = await fetch(`/api/posters/library/${library.key}`)
+          const res = await fetch(`/api/posters/config/${library.key}`)
           if (res.ok) {
             const data = await res.json()
             if (data.provider) providers[library.key] = data.provider
@@ -83,18 +88,16 @@ export function PostersView({
       return copy
     })
 
-    await fetch(`/api/posters/library/${libraryKey}`, {
+    await fetch(`/api/posters/config/${libraryKey}`, {
       method: next ? "POST" : "DELETE",
       headers: { "Content-Type": "application/json" },
       body: next ? JSON.stringify({ provider: next, settings: {} }) : undefined,
     })
   }
 
-  /* Start generation - FIXED */
+  /* Start generation */
   const handleStartGeneration = async () => {
     console.log('[PostersView] Starting generation...')
-    setIsGenerating(true)
-    setShowProgress(true)
 
     try {
       const configRes = await fetch("/api/posters/config")
@@ -113,15 +116,14 @@ export function PostersView({
 
       if (libs.length === 0) {
         console.error('[PostersView] No libraries configured for Stable Diffusion')
-        setIsGenerating(false)
         return
       }
 
-      const initialTasks: GenerationTask[] = []
+      const newJobIds: string[] = []
+      const jobMap: Record<string, string> = {}
 
       for (const lib of libs) {
-        const settings = posterConfig.librarySettings[lib.key]?.settings || {}
-        console.log(`[PostersView] Generating for ${lib.title} with settings:`, settings)
+        console.log(`[PostersView] Generating for ${lib.title}`)
 
         const res = await fetch("/api/posters/generate", {
           method: "POST",
@@ -142,80 +144,35 @@ export function PostersView({
         const data = await res.json()
         console.log(`[PostersView] Generation started for ${lib.title}:`, data)
 
-        initialTasks.push({
-          id: `task-${data.jobId}`,
-          jobId: data.jobId,
-          libraryKey: lib.key,
-          libraryTitle: lib.title,
-          status: "running",
-          totalItems: 0,
-          processedItems: 0,
-          provider: "stable-diffusion",
-        })
+        newJobIds.push(data.jobId)
+        jobMap[lib.key] = data.jobId
       }
 
-      setTasks(initialTasks)
-      console.log('[PostersView] Initial tasks created:', initialTasks)
+      setActiveJobIds(newJobIds)
+      setLibraryJobMap(jobMap)
+      console.log('[PostersView] Jobs started:', newJobIds)
     } catch (err) {
       console.error("[PostersView] Generation failed:", err)
-      setIsGenerating(false)
     }
   }
 
-  /* Poll job status */
-  useEffect(() => {
-    if (!showProgress || tasks.length === 0) return
-
-    let cancelled = false
-
-    const pollJobs = async () => {
-      try {
-        const updatedTasks = await Promise.all(
-          tasks.map(async task => {
-            if (!task.jobId || (task.status !== "running" && task.status !== "pending")) return task
-
-            try {
-              const res = await fetch(`/api/posters/jobs/${task.jobId}`)
-              if (!res.ok) return task
-
-              const data = await res.json()
-
-              return {
-                ...task,
-                status: data.status,
-                totalItems: data.totalItems ?? task.totalItems,
-                processedItems: data.processedItems ?? task.processedItems,
-                currentItem: data.currentItem,
-                completedAt: data.completedAt,
-              }
-            } catch {
-              return task
-            }
-          })
-        )
-
-        if (!cancelled) {
-          setTasks(updatedTasks)
-          
-          // Check if all tasks are done
-          const allDone = updatedTasks.every(t => 
-            t.status === "completed" || t.status === "error"
-          )
-          if (allDone) {
-            setIsGenerating(false)
-          }
-        }
-      } catch (err) {
-        console.error("Polling failed:", err)
-      }
+  // Convert hook tasks to GenerationTask format
+  const generationTasks: GenerationTask[] = tasks.map(task => {
+    const library = libraries.find(l => libraryJobMap[l.key] === task.id)
+    return {
+      id: task.id,
+      jobId: task.id,
+      libraryKey: task.libraryKey,
+      libraryTitle: library?.title || task.libraryKey,
+      status: task.status,
+      totalItems: task.totalItems,
+      completedItems: task.completedItems,
+      failedItems: task.failedItems,
+      currentItem: task.currentItem,
+      progress: task.progress,
+      provider: "stable-diffusion",
     }
-
-    const interval = setInterval(pollJobs, 1500)
-    return () => {
-      cancelled = true
-      clearInterval(interval)
-    }
-  }, [showProgress, tasks])
+  })
 
   /* Loading state */
   if (isLoading) {
@@ -238,7 +195,7 @@ export function PostersView({
     )
   }
 
-  /* Main UI - ALWAYS VISIBLE */
+  /* Main UI */
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -303,31 +260,43 @@ export function PostersView({
       )}
 
       {/* Active Tasks */}
-      {tasks.length > 0 && (
+      {generationTasks.length > 0 && (
         <Card className="p-6">
           <h3 className="font-semibold mb-4">Generation Progress</h3>
+          
+          {/* Overall stats */}
+          <div className="mb-4 p-3 bg-muted rounded-lg">
+            <div className="flex justify-between items-center">
+              <span className="text-sm font-medium">Overall Progress</span>
+              <span className="text-sm font-bold">{totalProgress}%</span>
+            </div>
+            <div className="mt-2 text-xs text-muted-foreground space-y-1">
+              <div>Completed: {totalCompleted} items</div>
+              {totalFailed > 0 && <div className="text-destructive">Failed: {totalFailed} items</div>}
+            </div>
+          </div>
+
+          {/* Individual tasks */}
           <div className="space-y-4">
-            {tasks.map(task => (
+            {generationTasks.map(task => (
               <div key={task.id} className="space-y-2">
                 <div className="flex justify-between items-center">
                   <span className="font-medium">{task.libraryTitle}</span>
                   <Badge variant={
                     task.status === "completed" ? "default" :
-                    task.status === "error" ? "destructive" :
-                    "secondary"
+                    task.status === "failed" ? "destructive" :
+                    task.status === "paused" ? "secondary" :
+                    "outline"
                   }>
                     {task.status}
                   </Badge>
                 </div>
                 <div className="flex justify-between text-sm">
                   <span className="text-muted-foreground">
-                    {task.processedItems} / {task.totalItems} items
+                    {task.completedItems} / {task.totalItems} items
+                    {task.failedItems > 0 && ` (${task.failedItems} failed)`}
                   </span>
-                  <span>
-                    {task.totalItems
-                      ? Math.round((task.processedItems / task.totalItems) * 100)
-                      : 0}%
-                  </span>
+                  <span>{task.progress}%</span>
                 </div>
                 {task.currentItem && (
                   <p className="text-xs text-muted-foreground">
@@ -337,9 +306,7 @@ export function PostersView({
                 <div className="w-full bg-secondary rounded-full h-2">
                   <div
                     className="bg-primary h-2 rounded-full transition-all"
-                    style={{
-                      width: `${task.totalItems ? (task.processedItems / task.totalItems) * 100 : 0}%`
-                    }}
+                    style={{ width: `${task.progress}%` }}
                   />
                 </div>
               </div>
@@ -347,23 +314,6 @@ export function PostersView({
           </div>
         </Card>
       )}
-
-      {/* Debug Info */}
-      <Card className="p-4 bg-muted">
-        <details>
-          <summary className="cursor-pointer text-sm font-medium">Debug Info</summary>
-          <pre className="mt-2 text-xs overflow-auto">
-            {JSON.stringify({ 
-              libraries: libraries.length,
-              libraryKeys: libraries.map(l => l.key),
-              activeProviders,
-              isGenerating,
-              tasksCount: tasks.length,
-              plexUrl: plexUrl ? "configured" : "missing"
-            }, null, 2)}
-          </pre>
-        </details>
-      </Card>
     </div>
   )
 }

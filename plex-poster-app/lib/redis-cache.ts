@@ -130,11 +130,29 @@ export class RedisCache {
     }
   }
 
+  async keys(pattern: string = "*"): Promise<string[]> {
+    if (!this.redis) {
+      return []
+    }
+
+    try {
+      const fullPattern = this.getKey(pattern)
+      const keys = await this.redis.keys(fullPattern)
+      
+      // Remove the prefix from returned keys to match the original key format
+      return keys.map(key => key.replace(`${this.prefix}:`, ''))
+    } catch (error) {
+      console.error("[v0] Redis keys error:", error)
+      return []
+    }
+  }
+
   async invalidateLibrary(libraryKey: string): Promise<void> {
     console.log(`[v0] Invalidating cache for library: ${libraryKey}`)
     await this.delete(`libraries`)
     await this.delete(`items:${libraryKey}`)
   }
+
 
   async invalidateAll(): Promise<void> {
     console.log("[v0] Invalidating all cache")
