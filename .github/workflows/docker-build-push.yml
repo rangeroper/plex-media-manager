@@ -44,8 +44,8 @@ jobs:
           context: ./plex-poster-app
           push: true
           tags: brmochel92/plex-poster-app:latest
-          cache-from: type=registry,ref=brmochel92/plex-poster-app:buildcache
-          cache-to: type=registry,ref=brmochel92/plex-poster-app:buildcache,mode=max
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       - name: Build and push sd-api
         uses: docker/build-push-action@v5
@@ -53,8 +53,8 @@ jobs:
           context: ./sd
           push: true
           tags: brmochel92/sd-api:latest
-          cache-from: type=registry,ref=brmochel92/sd-api:buildcache
-          cache-to: type=registry,ref=brmochel92/sd-api:buildcache,mode=max
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       - name: Build summary
         run: |
