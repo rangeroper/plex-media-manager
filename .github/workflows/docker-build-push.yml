@@ -1,35 +1,53 @@
-name: Deploy to Unraid
+name: Build and Push to Docker Hub
 
 on:
-  workflow_run:
-    workflows: ["Build and Push Docker Images"]
-    types:
-      - completed
+  push:
     branches:
       - main
-  workflow_dispatch:  # Manual trigger
+  workflow_dispatch:  # Allow manual trigger from GitHub UI
 
 jobs:
-  deploy:
+  build-and-push:
     runs-on: ubuntu-latest
-    if: ${{ github.event.workflow_run.conclusion == 'success' }}
     
     steps:
-      - name: Deploy to Unraid via SSH
-        uses: appleboy/ssh-action@v1.0.0
-        with:
-          host: ${{ secrets.UNRAID_HOST }}
-          username: ${{ secrets.UNRAID_USERNAME }}
-          key: ${{ secrets.UNRAID_SSH_KEY }}
-          port: 22
-          script: |
-            cd /mnt/user/appdata/compose/plex-media-manager
-            docker-compose pull
-            docker-compose up -d
-            docker image prune -f
-            echo "✅ Deployment complete!"
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-      - name: Deployment summary
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Build and push plex-poster-app
+        uses: docker/build-push-action@v5
+        with:
+          context: ./plex-poster-app
+          push: true
+          tags: brmochel92/plex-poster-app:latest
+          cache-from: type=registry,ref=brmochel92/plex-poster-app:buildcache
+          cache-to: type=registry,ref=brmochel92/plex-poster-app:buildcache,mode=max
+
+      - name: Build and push sd-api
+        uses: docker/build-push-action@v5
+        with:
+          context: ./sd
+          push: true
+          tags: brmochel92/sd-api:latest
+          cache-from: type=registry,ref=brmochel92/sd-api:buildcache
+          cache-to: type=registry,ref=brmochel92/sd-api:buildcache,mode=max
+
+      - name: Build summary
         run: |
-          echo "🚀 Deployed to Unraid server"
-          echo "📍 Location: /mnt/user/appdata/compose/plex-media-manager"
+          echo "✅ Successfully built and pushed to Docker Hub!"
+          echo ""
+          echo "📦 Images available at:"
+          echo "   - brmochel92/plex-poster-app:latest"
+          echo "   - brmochel92/sd-api:latest"
+          echo ""
+          echo "🚀 To pull on Unraid, run:"
+          echo "   docker-compose pull && docker-compose up -d"
