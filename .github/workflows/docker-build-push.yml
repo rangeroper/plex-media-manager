@@ -23,7 +23,7 @@ jobs:
             image: brmochel92/plex-poster-app
             needs_space: false
           - service: sd-api
-            context: ./sd/sd
+            context: ./sd
             image: brmochel92/sd-api
             needs_space: true
     
