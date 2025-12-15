@@ -5,6 +5,8 @@ import { Card } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Sparkles, Play } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Label } from "@/components/ui/label"
 
 interface Library {
   key: string
@@ -18,12 +20,25 @@ interface StableDiffusionProviderProps {
   isGenerating: boolean
 }
 
-export function StableDiffusionProvider({
-  libraries,
-  onStartGeneration,
-  isGenerating,
-}: StableDiffusionProviderProps) {
-  const [selectedStyle, setSelectedStyle] = useState("cartoon")
+const AVAILABLE_MODELS = [
+  { value: "sd35-large", label: "SD 3.5 Large (Best Quality)" },
+  { value: "sd35-medium", label: "SD 3.5 Medium (Balanced)" },
+  { value: "sdxl-turbo", label: "SDXL Turbo (Fastest)" },
+  { value: "sd-1.5", label: "SD 1.5 (Classic)" },
+]
+
+const AVAILABLE_STYLES = [
+  { value: "cinematic", label: "Cinematic" },
+  { value: "cartoon", label: "Cartoon" },
+  { value: "anime", label: "Anime" },
+  { value: "photorealistic", label: "Photorealistic" },
+  { value: "artistic", label: "Artistic" },
+  { value: "noir", label: "Film Noir" },
+  { value: "vibrant", label: "Vibrant" },
+]
+
+export function StableDiffusionProvider({ libraries, onStartGeneration, isGenerating }: StableDiffusionProviderProps) {
+  const [selectedStyle, setSelectedStyle] = useState("cinematic")
   const [selectedModel, setSelectedModel] = useState("sd35-large")
   const { toast } = useToast()
 
@@ -34,7 +49,7 @@ export function StableDiffusionProvider({
     async function loadSettings() {
       if (libraries.length > 0 && libraries[0].key) {
         try {
-          const response = await fetch(`/api/posters/library/${libraries[0].key}`)
+          const response = await fetch(`/api/posters/config/${libraries[0].key}`)
           if (response.ok) {
             const settings = await response.json()
             if (settings.settings?.model) {
@@ -45,7 +60,7 @@ export function StableDiffusionProvider({
             }
           }
         } catch (error) {
-          console.error('Failed to load settings:', error)
+          console.error("Failed to load settings:", error)
         }
       }
     }
@@ -55,8 +70,8 @@ export function StableDiffusionProvider({
 
   const handleStartGeneration = async () => {
     try {
-      const validLibraries = libraries.filter(lib => lib.key && lib.key !== 'undefined')
-      
+      const validLibraries = libraries.filter((lib) => lib.key && lib.key !== "undefined")
+
       if (validLibraries.length === 0) {
         toast({
           title: "Error",
@@ -65,28 +80,28 @@ export function StableDiffusionProvider({
         })
         return
       }
-      
+
       // Save settings for all selected libraries
       await Promise.all(
-        validLibraries.map(library =>
-          fetch(`/api/posters/library/${library.key}`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+        validLibraries.map((library) =>
+          fetch(`/api/posters/config/${library.key}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-              provider: 'stable-diffusion',
+              provider: "stable-diffusion",
               settings: {
                 model: selectedModel,
                 style: selectedStyle,
               },
             }),
-          })
-        )
+          }),
+        ),
       )
 
       // Start generation
       onStartGeneration()
     } catch (error) {
-      console.error('Failed to start generation:', error)
+      console.error("Failed to start generation:", error)
       toast({
         title: "Error",
         description: "Failed to start generation",
@@ -105,23 +120,55 @@ export function StableDiffusionProvider({
               <h4 className="text-lg font-semibold">Stable Diffusion 3.5</h4>
             </div>
             <p className="text-sm text-muted-foreground">
-              {libraries.length > 0 
-                ? `${libraries.length} ${libraries.length === 1 ? 'library' : 'libraries'} selected`
-                : 'Select libraries to configure'}
+              {libraries.length > 0
+                ? `${libraries.length} ${libraries.length === 1 ? "library" : "libraries"} selected`
+                : "Select libraries to configure"}
             </p>
           </div>
         </div>
 
         {isExpanded && (
           <div className="space-y-4 pt-4 border-t">
+            <div className="space-y-2">
+              <Label htmlFor="model-select">Model</Label>
+              <Select value={selectedModel} onValueChange={setSelectedModel}>
+                <SelectTrigger id="model-select">
+                  <SelectValue placeholder="Select model" />
+                </SelectTrigger>
+                <SelectContent>
+                  {AVAILABLE_MODELS.map((model) => (
+                    <SelectItem key={model.value} value={model.value}>
+                      {model.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">Choose the AI model for poster generation</p>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="style-select">Style</Label>
+              <Select value={selectedStyle} onValueChange={setSelectedStyle}>
+                <SelectTrigger id="style-select">
+                  <SelectValue placeholder="Select style" />
+                </SelectTrigger>
+                <SelectContent>
+                  {AVAILABLE_STYLES.map((style) => (
+                    <SelectItem key={style.value} value={style.value}>
+                      {style.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">Choose the artistic style for generated posters</p>
+            </div>
+
             <div className="flex items-center justify-between pt-4 border-t">
               <div className="space-y-1">
                 <p className="text-sm font-medium">Ready to generate</p>
-                <p className="text-xs text-muted-foreground">
-                  Settings will be saved automatically when you start
-                </p>
+                <p className="text-xs text-muted-foreground">Settings will be saved automatically when you start</p>
               </div>
-              
+
               <Button
                 onClick={handleStartGeneration}
                 disabled={libraries.length === 0 || isGenerating}

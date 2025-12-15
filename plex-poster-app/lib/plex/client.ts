@@ -217,7 +217,7 @@ export class PlexClient {
   async getItemMetadata(serverUrl: string, ratingKey: string): Promise<any> {
     try {
       const url = `${serverUrl}/library/metadata/${ratingKey}?X-Plex-Token=${this.authToken}`
-      
+
       const response = await fetch(url, {
         headers: {
           Accept: "application/json",
@@ -259,7 +259,6 @@ export class PlexClient {
         audienceRating: item.audienceRating,
         viewCount: item.viewCount,
         lastViewedAt: item.lastViewedAt,
-        // Include any other fields from the Plex API you want
       }
     } catch (error) {
       console.error(`[PlexClient] Error fetching metadata for ${ratingKey}:`, error)
@@ -267,5 +266,49 @@ export class PlexClient {
     }
   }
 
-}
+  /**
+   * Upload a poster image to Plex for a specific item
+   */
+  async uploadPoster(serverUrl: string, ratingKey: string, imageBuffer: Buffer): Promise<boolean> {
+    try {
+      console.log(`[PlexClient] Uploading poster for rating key: ${ratingKey}`)
 
+      const arrayBuffer = new ArrayBuffer(imageBuffer.length)
+      const view = new Uint8Array(arrayBuffer)
+      for (let i = 0; i < imageBuffer.length; i++) {
+        view[i] = imageBuffer[i]
+      }
+
+      const blob = new Blob([arrayBuffer], { type: "image/png" })
+
+      const formData = new globalThis.FormData()
+      formData.append("file", blob, `poster_${ratingKey}.png`)
+
+      // Upload the poster
+      const uploadUrl = `${serverUrl}/library/metadata/${ratingKey}/posters?X-Plex-Token=${this.authToken}`
+
+      const response = await fetch(uploadUrl, {
+        method: "POST",
+        headers: {
+          "X-Plex-Token": this.authToken,
+          "X-Plex-Client-Identifier": this.clientId,
+        },
+        body: formData as any,
+        signal: AbortSignal.timeout(60000),
+      })
+
+      if (!response.ok) {
+        const errorText = await response.text()
+        console.error(`[PlexClient] Failed to upload poster: ${response.status} - ${errorText}`)
+        throw new Error(`Failed to upload poster: ${response.status}`)
+      }
+
+      console.log(`[PlexClient] Successfully uploaded poster for rating key: ${ratingKey}`)
+      return true
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      console.error(`[PlexClient] Error uploading poster for ${ratingKey}:`, message)
+      throw error
+    }
+  }
+}

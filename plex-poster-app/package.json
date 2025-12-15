@@ -1,17 +1,12 @@
 {
-  "name": "my-v0-project",
+  "name": "plex-poster-app",
   "version": "0.1.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "dev:docker": "docker-compose up",
-    "dev:docker:build": "docker-compose up --build",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint .",
-    "docker:up": "docker-compose up -d",
-    "docker:down": "docker-compose down",
-    "docker:logs": "docker-compose logs -f"
+    "lint": "eslint ."
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",
@@ -66,7 +61,8 @@
     "tailwindcss-animate": "^1.0.7",
     "uuid": "^13.0.0",
     "vaul": "^1.1.2",
-    "zod": "3.25.76"
+    "zod": "3.25.76",
+    "form-data": "4.0.5"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.1.9",

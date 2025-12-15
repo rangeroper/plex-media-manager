@@ -2,12 +2,12 @@
 
 import { useState, useEffect } from "react"
 import { Button } from "@/components/ui/button"
-import { Settings, Film, FolderOpen, RefreshCw, Layers, Image } from "lucide-react"
-import { ImageIcon } from "lucide-react"
+import { Settings, Film, FolderOpen, RefreshCw, Layers, ImageIcon, ListTodo } from "lucide-react"
 import { SettingsPanel } from "@/components/settings-panel"
 import { LibraryGrid } from "@/components/library-grid"
 import { CollectionsView } from "@/components/views/collections-view"
 import { PostersView } from "@/components/views/posters-view"
+import { JobsView } from "@/components/views/jobs-view"
 
 export function DashboardView() {
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -16,7 +16,7 @@ export function DashboardView() {
   const [serverInfo, setServerInfo] = useState<{ name: string; id: string } | null>(null)
   const [libraries, setLibraries] = useState<any[]>([])
   const [selectedLibrary, setSelectedLibrary] = useState<string | null>(null)
-  const [currentView, setCurrentView] = useState<"libraries" | "collections" | "posters">("libraries")
+  const [currentView, setCurrentView] = useState<"libraries" | "collections" | "posters" | "jobs">("libraries")
   const [hasAttemptedLoad, setHasAttemptedLoad] = useState(false)
   const [isLoadingConfig, setIsLoadingConfig] = useState(true)
   const [isRefreshing, setIsRefreshing] = useState(false)
@@ -31,10 +31,8 @@ export function DashboardView() {
           if (config.authToken && config.selectedServer) {
             console.log("[v0] Found saved Plex config, auto-connecting...")
 
-            // Set the connection info
             setPlexToken(config.authToken)
 
-            // Build all URLs to try
             const urlsToTry: string[] = []
             if (config.selectedServer.primaryUrl) urlsToTry.push(config.selectedServer.primaryUrl)
             if (config.selectedServer.localUrl) urlsToTry.push(config.selectedServer.localUrl)
@@ -47,13 +45,11 @@ export function DashboardView() {
               })
             }
 
-            // Set server info
             setServerInfo({
               name: config.selectedServer.name,
               id: config.selectedServer.machineIdentifier,
             })
 
-            // Try to fetch libraries
             const libResponse = await fetch("/api/plex/libraries", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
@@ -111,10 +107,8 @@ export function DashboardView() {
 
       console.log("[v0] All cache invalidated, refreshing all libraries...")
 
-      // Force re-fetch of libraries
       const urlsToTry: string[] = []
       if (serverInfo) {
-        // Rebuild URLs from server info
         const savedUrl = plexUrl
         if (savedUrl) urlsToTry.push(savedUrl)
       }
@@ -134,7 +128,6 @@ export function DashboardView() {
         console.log("[v0] Successfully refreshed all libraries")
       }
 
-      // Force component re-render by resetting selected library
       const current = selectedLibrary
       setSelectedLibrary(null)
       setTimeout(() => setSelectedLibrary(current), 100)
@@ -242,35 +235,46 @@ export function DashboardView() {
                   onClick={() => setCurrentView("posters")}
                   className="gap-2"
                 >
-                  <Image className="h-4 w-4" />
+                  <ImageIcon className="h-4 w-4" />
                   Posters
+                </Button>
+                <Button
+                  variant={currentView === "jobs" ? "default" : "ghost"}
+                  size="sm"
+                  onClick={() => setCurrentView("jobs")}
+                  className="gap-2"
+                >
+                  <ListTodo className="h-4 w-4" />
+                  Jobs
                 </Button>
               </div>
             </div>
 
-            <div className="flex items-center gap-2 overflow-x-auto pb-2">
-              <Button
-                variant={selectedLibrary === null ? "default" : "ghost"}
-                size="sm"
-                onClick={() => setSelectedLibrary(null)}
-                className="gap-2 whitespace-nowrap"
-              >
-                All Libraries
-              </Button>
-              {libraries.map((library) => (
+            {currentView !== "jobs" && (
+              <div className="flex items-center gap-2 overflow-x-auto pb-2">
                 <Button
-                  key={library.key}
-                  variant={selectedLibrary === library.key ? "default" : "ghost"}
+                  variant={selectedLibrary === null ? "default" : "ghost"}
                   size="sm"
-                  onClick={() => setSelectedLibrary(library.key)}
+                  onClick={() => setSelectedLibrary(null)}
                   className="gap-2 whitespace-nowrap"
                 >
-                  {library.type === "movie" && <Film className="h-4 w-4" />}
-                  {library.type === "show" && <ImageIcon className="h-4 w-4" />}
-                  {library.title}
+                  All Libraries
                 </Button>
-              ))}
-            </div>
+                {libraries.map((library) => (
+                  <Button
+                    key={library.key}
+                    variant={selectedLibrary === library.key ? "default" : "ghost"}
+                    size="sm"
+                    onClick={() => setSelectedLibrary(library.key)}
+                    className="gap-2 whitespace-nowrap"
+                  >
+                    {library.type === "movie" && <Film className="h-4 w-4" />}
+                    {library.type === "show" && <ImageIcon className="h-4 w-4" />}
+                    {library.title}
+                  </Button>
+                ))}
+              </div>
+            )}
 
             {currentView === "libraries" ? (
               <>
@@ -293,9 +297,9 @@ export function DashboardView() {
                 libraries={libraries.map((lib) => ({ key: lib.key, title: lib.title }))}
                 selectedLibraryKey={selectedLibrary}
               />
-            ) : (
+            ) : currentView === "posters" ? (
               <PostersView
-                key={selectedLibrary || 'all-libraries'}
+                key={selectedLibrary || "all-libraries"}
                 plexUrl={plexUrl}
                 plexToken={plexToken}
                 libraries={
@@ -306,6 +310,8 @@ export function DashboardView() {
                     : libraries.map((lib) => ({ key: lib.key, title: lib.title, type: lib.type }))
                 }
               />
+            ) : (
+              <JobsView libraries={libraries.map((lib) => ({ key: lib.key, title: lib.title }))} />
             )}
           </div>
         )}

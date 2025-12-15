@@ -1,3 +1,5 @@
+"use client"
+
 import { useState, useEffect, useRef } from "react"
 
 export type JobStatus = "pending" | "running" | "completed" | "paused" | "failed"
@@ -9,6 +11,10 @@ export interface PosterJobStatus {
   completedItems: number
   failedItems: number
   currentItem?: string
+  currentItemIndex?: number
+  currentItemRatingKey?: string
+  remainingItems?: number
+  libraryKey?: string
   progress: number
   createdAt: string
   startedAt?: string
@@ -30,6 +36,9 @@ export interface Task {
   completedItems: number
   failedItems: number
   currentItem?: string
+  currentItemIndex?: number
+  currentItemRatingKey?: string
+  remainingItems?: number
   progress: number
   errors: Array<{
     ratingKey: string
@@ -43,10 +52,7 @@ interface UsePosterJobsOptions {
   stopOnComplete?: boolean
 }
 
-export function usePosterJobs(
-  jobIds: string[],
-  options: UsePosterJobsOptions = {}
-) {
+export function usePosterJobs(jobIds: string[], options: UsePosterJobsOptions = {}) {
   const { pollingInterval = 2000, stopOnComplete = true } = options
   const [tasks, setTasks] = useState<Task[]>([])
   const [isLoading, setIsLoading] = useState(true)
@@ -65,29 +71,31 @@ export function usePosterJobs(
         jobIds.map(async (jobId) => {
           try {
             const res = await fetch(`/api/posters/generate/${jobId}`)
-            
+
             if (!res.ok) {
               throw new Error(`HTTP ${res.status}`)
             }
 
-            const data = await res.json() as PosterJobStatus
+            const data = (await res.json()) as PosterJobStatus
 
             return {
               id: data.jobId,
-              libraryKey: data.jobId, // You may want to store libraryKey when creating job
+              libraryKey: data.libraryKey || data.jobId,
               provider: "stable-diffusion" as const,
               status: data.status,
               totalItems: data.totalItems,
               completedItems: data.completedItems,
               failedItems: data.failedItems,
               currentItem: data.currentItem,
+              currentItemIndex: data.currentItemIndex,
+              currentItemRatingKey: data.currentItemRatingKey,
+              remainingItems: data.remainingItems,
               progress: data.progress,
               errors: data.errors || [],
             }
           } catch (err) {
             console.error(`Failed to fetch job ${jobId}:`, err)
-            
-            // Return error state
+
             return {
               id: jobId,
               libraryKey: jobId,
@@ -100,17 +108,15 @@ export function usePosterJobs(
               errors: [{ ratingKey: jobId, error: "Failed to fetch job status" }],
             }
           }
-        })
+        }),
       )
-      
+
       setTasks(updatedTasks)
       setIsLoading(false)
 
       // Stop polling if all jobs are done and stopOnComplete is true
       if (stopOnComplete) {
-        const allDone = updatedTasks.every(
-          (t) => t.status === "completed" || t.status === "failed"
-        )
+        const allDone = updatedTasks.every((t) => t.status === "completed" || t.status === "failed")
         if (allDone && intervalRef.current) {
           clearInterval(intervalRef.current)
           intervalRef.current = null
@@ -132,15 +138,9 @@ export function usePosterJobs(
     }
   }, [jobIds, pollingInterval, stopOnComplete])
 
-  const isGenerating = tasks.some(
-    (t) => t.status === "running" || t.status === "pending"
-  )
+  const isGenerating = tasks.some((t) => t.status === "running" || t.status === "pending")
 
-  const totalProgress = tasks.length > 0
-    ? Math.round(
-        tasks.reduce((sum, t) => sum + t.progress, 0) / tasks.length
-      )
-    : 0
+  const totalProgress = tasks.length > 0 ? Math.round(tasks.reduce((sum, t) => sum + t.progress, 0) / tasks.length) : 0
 
   const totalCompleted = tasks.reduce((sum, t) => sum + t.completedItems, 0)
   const totalFailed = tasks.reduce((sum, t) => sum + t.failedItems, 0)

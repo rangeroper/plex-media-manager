@@ -38,20 +38,71 @@ interface PostersViewProps {
 
 type ProviderType = "stable-diffusion" | "fanart" | "tmdb" | "imdb"
 
-export function PostersView({
-  plexUrl,
-  plexToken,
-  libraries = [],
-}: PostersViewProps) {
+const STORAGE_KEY = "plex-poster-active-jobs"
+
+export function PostersView({ plexUrl, plexToken, libraries = [] }: PostersViewProps) {
   const [isLoading, setIsLoading] = useState(false)
   const [activeJobIds, setActiveJobIds] = useState<string[]>([])
   const [activeProviders, setActiveProviders] = useState<Record<string, ProviderType>>({})
   const [libraryJobMap, setLibraryJobMap] = useState<Record<string, string>>({})
 
-  // Use the poster jobs hook
   const { tasks, isGenerating, totalProgress, totalCompleted, totalFailed } = usePosterJobs(activeJobIds)
 
   const hasStableDiffusionSelected = Object.values(activeProviders).includes("stable-diffusion")
+
+  useEffect(() => {
+    try {
+      const savedJobs = localStorage.getItem(STORAGE_KEY)
+      if (savedJobs) {
+        const parsed = JSON.parse(savedJobs)
+        if (parsed.jobIds && Array.isArray(parsed.jobIds)) {
+          console.log("[PostersView] Restoring active jobs from storage:", parsed.jobIds)
+          setActiveJobIds(parsed.jobIds)
+          if (parsed.libraryJobMap) {
+            setLibraryJobMap(parsed.libraryJobMap)
+          }
+        }
+      }
+    } catch (error) {
+      console.error("[PostersView] Failed to load persisted jobs:", error)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (activeJobIds.length > 0) {
+      try {
+        const data = {
+          jobIds: activeJobIds,
+          libraryJobMap,
+          timestamp: new Date().toISOString(),
+        }
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(data))
+        console.log("[PostersView] Persisted active jobs to storage")
+      } catch (error) {
+        console.error("[PostersView] Failed to persist jobs:", error)
+      }
+    } else {
+      // Clear storage when no active jobs
+      localStorage.removeItem(STORAGE_KEY)
+    }
+  }, [activeJobIds, libraryJobMap])
+
+  useEffect(() => {
+    if (tasks.length > 0) {
+      const completedOrFailedIds = tasks
+        .filter((t) => t.status === "completed" || t.status === "failed")
+        .map((t) => t.id)
+
+      if (completedOrFailedIds.length > 0) {
+        // Wait a bit before removing to let users see the final state
+        const timeout = setTimeout(() => {
+          setActiveJobIds((prev) => prev.filter((id) => !completedOrFailedIds.includes(id)))
+        }, 5000) // 5 seconds delay
+
+        return () => clearTimeout(timeout)
+      }
+    }
+  }, [tasks])
 
   /* Load provider settings */
   useEffect(() => {
@@ -82,7 +133,7 @@ export function PostersView({
   const handleProviderToggle = async (libraryKey: string, provider: ProviderType) => {
     const next = activeProviders[libraryKey] === provider ? undefined : provider
 
-    setActiveProviders(prev => {
+    setActiveProviders((prev) => {
       const copy = { ...prev }
       next ? (copy[libraryKey] = next) : delete copy[libraryKey]
       return copy
@@ -97,25 +148,26 @@ export function PostersView({
 
   /* Start generation */
   const handleStartGeneration = async () => {
-    console.log('[PostersView] Starting generation...')
+    console.log("[PostersView] Starting generation...")
 
     try {
       const configRes = await fetch("/api/posters/config")
       if (!configRes.ok) {
         throw new Error(`Config fetch failed: ${configRes.status}`)
       }
-      
-      const posterConfig = await configRes.json()
-      console.log('[PostersView] Loaded config:', posterConfig)
 
-      const libs = libraries.filter(
-        l => posterConfig.librarySettings?.[l.key]?.provider === "stable-diffusion"
+      const posterConfig = await configRes.json()
+      console.log("[PostersView] Loaded config:", posterConfig)
+
+      const libs = libraries.filter((l) => posterConfig.librarySettings?.[l.key]?.provider === "stable-diffusion")
+
+      console.log(
+        "[PostersView] Libraries to process:",
+        libs.map((l) => l.title),
       )
 
-      console.log('[PostersView] Libraries to process:', libs.map(l => l.title))
-
       if (libs.length === 0) {
-        console.error('[PostersView] No libraries configured for Stable Diffusion')
+        console.error("[PostersView] No libraries configured for Stable Diffusion")
         return
       }
 
@@ -137,7 +189,7 @@ export function PostersView({
         if (!res.ok) {
           console.error(`[PostersView] Generate failed for ${lib.title}:`, res.status)
           const errorText = await res.text()
-          console.error('[PostersView] Error response:', errorText)
+          console.error("[PostersView] Error response:", errorText)
           continue
         }
 
@@ -150,15 +202,15 @@ export function PostersView({
 
       setActiveJobIds(newJobIds)
       setLibraryJobMap(jobMap)
-      console.log('[PostersView] Jobs started:', newJobIds)
+      console.log("[PostersView] Jobs started:", newJobIds)
     } catch (err) {
       console.error("[PostersView] Generation failed:", err)
     }
   }
 
   // Convert hook tasks to GenerationTask format
-  const generationTasks: GenerationTask[] = tasks.map(task => {
-    const library = libraries.find(l => libraryJobMap[l.key] === task.id)
+  const generationTasks: GenerationTask[] = tasks.map((task) => {
+    const library = libraries.find((l) => libraryJobMap[l.key] === task.id)
     return {
       id: task.id,
       jobId: task.id,
@@ -206,14 +258,18 @@ export function PostersView({
 
       {/* Library Configuration */}
       <div className="space-y-4">
-        {libraries.map(library => (
+        {libraries.map((library) => (
           <Card key={library.key} className="p-4">
             <div className="flex items-center justify-between">
               <div>
                 <h3 className="font-semibold">{library.title}</h3>
-                <p className="text-sm text-muted-foreground">{library.type}</p>
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <span>{library.type}</span>
+                  <span>•</span>
+                  <span className="font-mono text-xs">Key: {library.key}</span>
+                </div>
               </div>
-              
+
               <div className="flex gap-2">
                 <Button
                   variant={activeProviders[library.key] === "stable-diffusion" ? "default" : "outline"}
@@ -241,9 +297,7 @@ export function PostersView({
 
             {activeProviders[library.key] && (
               <div className="mt-3 pt-3 border-t">
-                <Badge variant="secondary">
-                  Active: {activeProviders[library.key]}
-                </Badge>
+                <Badge variant="secondary">Active: {activeProviders[library.key]}</Badge>
               </div>
             )}
           </Card>
@@ -253,7 +307,7 @@ export function PostersView({
       {/* Stable Diffusion Provider Settings */}
       {hasStableDiffusionSelected && (
         <StableDiffusionProvider
-          libraries={libraries.filter(l => activeProviders[l.key] === "stable-diffusion")}
+          libraries={libraries.filter((l) => activeProviders[l.key] === "stable-diffusion")}
           onStartGeneration={handleStartGeneration}
           isGenerating={isGenerating}
         />
@@ -263,7 +317,7 @@ export function PostersView({
       {generationTasks.length > 0 && (
         <Card className="p-6">
           <h3 className="font-semibold mb-4">Generation Progress</h3>
-          
+
           {/* Overall stats */}
           <div className="mb-4 p-3 bg-muted rounded-lg">
             <div className="flex justify-between items-center">
@@ -278,39 +332,64 @@ export function PostersView({
 
           {/* Individual tasks */}
           <div className="space-y-4">
-            {generationTasks.map(task => (
-              <div key={task.id} className="space-y-2">
-                <div className="flex justify-between items-center">
-                  <span className="font-medium">{task.libraryTitle}</span>
-                  <Badge variant={
-                    task.status === "completed" ? "default" :
-                    task.status === "failed" ? "destructive" :
-                    task.status === "paused" ? "secondary" :
-                    "outline"
-                  }>
-                    {task.status}
-                  </Badge>
+            {generationTasks.map((task) => {
+              const taskData = tasks.find((t) => t.id === task.id)
+              return (
+                <div key={task.id} className="space-y-2 p-4 border border-border rounded-lg bg-card/50">
+                  <div className="flex justify-between items-start">
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium">{task.libraryTitle}</span>
+                        <Badge
+                          variant={
+                            task.status === "completed"
+                              ? "default"
+                              : task.status === "failed"
+                                ? "destructive"
+                                : task.status === "paused"
+                                  ? "secondary"
+                                  : "outline"
+                          }
+                        >
+                          {task.status}
+                        </Badge>
+                      </div>
+                      <p className="text-xs text-muted-foreground font-mono">Library Key: {task.libraryKey}</p>
+                    </div>
+                    <span className="text-2xl font-bold">{task.progress}%</span>
+                  </div>
+
+                  <div className="flex justify-between text-sm">
+                    <span className="text-muted-foreground">
+                      {task.completedItems} / {task.totalItems} items processed
+                      {task.failedItems > 0 && ` (${task.failedItems} failed)`}
+                      {taskData?.remainingItems !== undefined && ` • ${taskData.remainingItems} in queue`}
+                    </span>
+                  </div>
+
+                  {taskData?.currentItem && taskData?.currentItemIndex && (
+                    <div className="space-y-1 pt-2 border-t">
+                      <p className="text-xs font-medium text-foreground">
+                        Processing Item {taskData.currentItemIndex} of {task.totalItems}:
+                      </p>
+                      <p className="text-sm text-muted-foreground truncate">{taskData.currentItem}</p>
+                      {taskData.currentItemRatingKey && (
+                        <p className="text-xs text-muted-foreground font-mono">
+                          Rating Key: {taskData.currentItemRatingKey}
+                        </p>
+                      )}
+                    </div>
+                  )}
+
+                  <div className="w-full bg-secondary rounded-full h-2.5 mt-2">
+                    <div
+                      className="bg-primary h-2.5 rounded-full transition-all duration-500 ease-out"
+                      style={{ width: `${task.progress}%` }}
+                    />
+                  </div>
                 </div>
-                <div className="flex justify-between text-sm">
-                  <span className="text-muted-foreground">
-                    {task.completedItems} / {task.totalItems} items
-                    {task.failedItems > 0 && ` (${task.failedItems} failed)`}
-                  </span>
-                  <span>{task.progress}%</span>
-                </div>
-                {task.currentItem && (
-                  <p className="text-xs text-muted-foreground">
-                    Current: {task.currentItem}
-                  </p>
-                )}
-                <div className="w-full bg-secondary rounded-full h-2">
-                  <div
-                    className="bg-primary h-2 rounded-full transition-all"
-                    style={{ width: `${task.progress}%` }}
-                  />
-                </div>
-              </div>
-            ))}
+              )
+            })}
           </div>
         </Card>
       )}
