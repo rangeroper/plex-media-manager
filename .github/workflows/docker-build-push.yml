@@ -1,0 +1,35 @@
+name: Deploy to Unraid
+
+on:
+  workflow_run:
+    workflows: ["Build and Push Docker Images"]
+    types:
+      - completed
+    branches:
+      - main
+  workflow_dispatch:  # Manual trigger
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    
+    steps:
+      - name: Deploy to Unraid via SSH
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: ${{ secrets.UNRAID_HOST }}
+          username: ${{ secrets.UNRAID_USERNAME }}
+          key: ${{ secrets.UNRAID_SSH_KEY }}
+          port: 22
+          script: |
+            cd /mnt/user/appdata/compose/plex-media-manager
+            docker-compose pull
+            docker-compose up -d
+            docker image prune -f
+            echo "✅ Deployment complete!"
+
+      - name: Deployment summary
+        run: |
+          echo "🚀 Deployed to Unraid server"
+          echo "📍 Location: /mnt/user/appdata/compose/plex-media-manager"
