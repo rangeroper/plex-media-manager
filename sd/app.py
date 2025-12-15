@@ -118,16 +118,24 @@ def _load_model_into_memory(model_key: str):
     start_time = time.time()
     
     try:
+        # Determine if this is a large model requiring CPU offloading
+        is_large_model = model_key in ['sd-3.5-large', 'sd-3.5-medium']
+        
+        if is_large_model:
+            logger.info(f"🧠 Large model detected - enabling memory optimizations for 16GB VRAM")
+        
         # Select appropriate pipeline class
         if model_config['class'] == 'StableDiffusion3Pipeline':
             pipe = StableDiffusion3Pipeline.from_pretrained(
                 model_dir,
-                torch_dtype=torch.float16
+                torch_dtype=torch.float16,
+                variant="fp16"  # Use FP16 variant if available
             )
         elif model_config['class'] == 'StableDiffusionXLPipeline':
             pipe = StableDiffusionXLPipeline.from_pretrained(
                 model_dir,
-                torch_dtype=torch.float16
+                torch_dtype=torch.float16,
+                variant="fp16"
             )
         else:  # DiffusionPipeline
             pipe = DiffusionPipeline.from_pretrained(
@@ -135,7 +143,35 @@ def _load_model_into_memory(model_key: str):
                 torch_dtype=torch.float16
             )
         
-        pipe = pipe.to("cuda")
+        if is_large_model:
+            logger.info("🔧 Applying memory optimizations:")
+            
+            # Enable CPU offloading for large components
+            logger.info("  - Enabling model CPU offload (keeps UNet on GPU, moves others to CPU)")
+            pipe.enable_model_cpu_offload()
+            
+            # Enable attention slicing to reduce memory usage
+            logger.info("  - Enabling attention slicing")
+            pipe.enable_attention_slicing(slice_size="auto")
+            
+            # Enable VAE slicing for large images
+            logger.info("  - Enabling VAE slicing")
+            pipe.enable_vae_slicing()
+            
+            # Enable memory efficient attention if available (xformers or PyTorch 2.0)
+            try:
+                pipe.enable_xformers_memory_efficient_attention()
+                logger.info("  - Enabled xformers memory efficient attention")
+            except Exception:
+                # xformers not available, use PyTorch 2.0 scaled dot product attention
+                try:
+                    pipe.unet.set_attn_processor(None)  # Use default PyTorch 2.0 SDPA
+                    logger.info("  - Using PyTorch 2.0 scaled dot product attention")
+                except Exception:
+                    logger.info("  - Memory efficient attention not available")
+        else:
+            # For smaller models, just move to GPU
+            pipe = pipe.to("cuda")
         
         # Update globals
         MODEL_LOADED = True
@@ -149,7 +185,8 @@ def _load_model_into_memory(model_key: str):
         if torch.cuda.is_available():
             memory_allocated = torch.cuda.memory_allocated(0) / 1024**3
             memory_reserved = torch.cuda.memory_reserved(0) / 1024**3
-            logger.info(f"💾 GPU Memory: {memory_allocated:.2f} GB allocated, {memory_reserved:.2f} GB reserved")
+            memory_free = (torch.cuda.get_device_properties(0).total_memory - torch.cuda.memory_allocated(0)) / 1024**3
+            logger.info(f"💾 GPU Memory: {memory_allocated:.2f} GB allocated, {memory_reserved:.2f} GB reserved, {memory_free:.2f} GB free")
         
         logger.info("=" * 80)
         
@@ -492,10 +529,12 @@ def health():
     if torch.cuda.is_available():
         memory_allocated = torch.cuda.memory_allocated(0) / 1024**3
         memory_reserved = torch.cuda.memory_reserved(0) / 1024**3
+        memory_free = (torch.cuda.get_device_properties(0).total_memory - torch.cuda.memory_allocated(0)) / 1024**3
         gpu_info = {
             'name': torch.cuda.get_device_name(0),
             'memory_allocated_gb': round(memory_allocated, 2),
-            'memory_reserved_gb': round(memory_reserved, 2)
+            'memory_reserved_gb': round(memory_reserved, 2),
+            'memory_free_gb': round(memory_free, 2)
         }
     
     return jsonify({
