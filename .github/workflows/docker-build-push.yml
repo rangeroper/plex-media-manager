@@ -23,7 +23,7 @@ jobs:
             image: brmochel92/plex-poster-app
             needs_space: false
           - service: sd-api
-            context: ./sd
+            context: ./sd/sd
             image: brmochel92/sd-api
             needs_space: true
     
@@ -53,18 +53,24 @@ jobs:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
+      - name: Cache pip packages
+        if: matrix.service == 'sd-api'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('sd/sd/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
       - name: Build and push ${{ matrix.service }}
         uses: docker/build-push-action@v5
         with:
           context: ${{ matrix.context }}
           push: true
           tags: ${{ matrix.image }}:latest
-          cache-from: |
-            type=registry,ref=${{ matrix.image }}:buildcache
-            type=gha
-          cache-to: |
-            type=registry,ref=${{ matrix.image }}:buildcache,mode=max
-            type=gha,mode=max
+          cache-from: type=registry,ref=${{ matrix.image }}:buildcache
+          cache-to: type=registry,ref=${{ matrix.image }}:buildcache,mode=max
           build-args: |
             BUILDKIT_INLINE_CACHE=1
 
