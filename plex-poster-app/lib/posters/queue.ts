@@ -317,7 +317,6 @@ export async function checkAllQueuesEmpty(): Promise<boolean> {
  * Get currently processing item (for crash recovery)
  */
 export async function getProcessingItem(jobId: string): Promise<QueueItem | null> {
-  // ... (Remains unchanged)
   const data = await cache.get<string>(getPosterKey(`${PROCESSING_KEY}:${jobId}`))
   if (!data) return null
   return JSON.parse(data)
@@ -325,7 +324,6 @@ export async function getProcessingItem(jobId: string): Promise<QueueItem | null
 
 /**
  * Pause a job (will stop after current item completes)
-// ... (Remains unchanged)
  */
 export async function pauseJob(jobId: string): Promise<void> {
   await updateJobStatus(jobId, "paused")
@@ -333,7 +331,6 @@ export async function pauseJob(jobId: string): Promise<void> {
 
 /**
  * Resume a paused job
-// ... (Remains unchanged)
  */
 export async function resumeJob(jobId: string): Promise<void> {
   await updateJobStatus(jobId, "running")
@@ -341,7 +338,6 @@ export async function resumeJob(jobId: string): Promise<void> {
 
 /**
  * Get all active jobs (for recovery on startup)
-// ... (Remains unchanged)
  */
 export async function getActiveJobs(): Promise<PosterJob[]> {
   const keys = await cache.keys(getPosterKey("job:*"))
@@ -377,4 +373,36 @@ export async function getAllJobs(): Promise<PosterJob[]> {
 
   // Sort by creation date (newest first)
   return jobs.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+}
+
+/**
+ * Delete a job and all associated queue items
+ */
+export async function deleteJob(jobId: string): Promise<void> {
+  const redis = (cache as any).redis
+  if (!redis) return
+
+  try {
+    console.log(`[Queue] Deleting job ${jobId} and all associated items...`)
+
+    // 1. Delete the job itself
+    await cache.delete(getPosterKey(`job:${jobId}`))
+
+    // 2. Delete the queue for this job
+    await redis.del(`${QUEUE_KEY}:${jobId}`)
+
+    // 3. Delete all queue items
+    const queueItemKeys = await cache.keys(getPosterKey(`queue-item:${jobId}:*`))
+    for (const key of queueItemKeys) {
+      await cache.delete(key)
+    }
+
+    // 4. Delete processing marker if exists
+    await cache.delete(getPosterKey(`${PROCESSING_KEY}:${jobId}`))
+
+    console.log(`[Queue] Job ${jobId} deleted successfully`)
+  } catch (error) {
+    console.error(`[Queue] Error deleting job ${jobId}:`, error)
+    throw error
+  }
 }

@@ -5,7 +5,7 @@ import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
-import { Pause, Play, Clock, CheckCircle2, XCircle, Loader2 } from "lucide-react"
+import { Pause, Play, Clock, CheckCircle2, XCircle, Loader2, Trash2 } from "lucide-react"
 import { usePosterJobControl } from "@/hooks/usePosterJobs"
 import { formatDistanceToNow } from "date-fns"
 
@@ -125,6 +125,7 @@ export function JobsView({ libraries }: JobsViewProps) {
 
 function JobCard({ job, libraryTitle, onUpdate }: { job: Job; libraryTitle: string; onUpdate?: () => void }) {
   const { pauseJob, resumeJob, isControlling } = usePosterJobControl(job.jobId)
+  const [isDeleting, setIsDeleting] = useState(false)
 
   const handlePauseResume = async () => {
     try {
@@ -136,6 +137,30 @@ function JobCard({ job, libraryTitle, onUpdate }: { job: Job; libraryTitle: stri
       onUpdate?.()
     } catch (error) {
       console.error("Failed to control job:", error)
+    }
+  }
+
+  const handleDelete = async () => {
+    if (!confirm(`Are you sure you want to delete this job? This will cancel any ongoing generation.`)) {
+      return
+    }
+
+    setIsDeleting(true)
+    try {
+      const response = await fetch(`/api/posters/jobs/${job.jobId}`, {
+        method: "DELETE",
+      })
+
+      if (!response.ok) {
+        throw new Error("Failed to delete job")
+      }
+
+      onUpdate?.()
+    } catch (error) {
+      console.error("Failed to delete job:", error)
+      alert("Failed to delete job. Please try again.")
+    } finally {
+      setIsDeleting(false)
     }
   }
 
@@ -217,6 +242,16 @@ function JobCard({ job, libraryTitle, onUpdate }: { job: Job; libraryTitle: stri
                 )}
               </Button>
             )}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleDelete}
+              disabled={isDeleting}
+              className="gap-2 bg-transparent text-destructive hover:text-destructive"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              {isDeleting ? "Deleting..." : "Delete"}
+            </Button>
           </div>
         </div>
 

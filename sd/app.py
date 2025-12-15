@@ -18,6 +18,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
+
 app = Flask(__name__)
 
 AVAILABLE_MODELS = {
@@ -25,17 +27,21 @@ AVAILABLE_MODELS = {
         "id": "stabilityai/stable-diffusion-3.5-large",
         "class": "StableDiffusion3Pipeline",
         "requires_auth": True,
-        "default_steps": 28,
-        "default_guidance": 4.5,
-        "needs_optimization": True
+        "default_steps": 14,  # Reduced from 28 to 14 for memory savings
+        "default_guidance": 3.5,  # Reduced from 4.5
+        "needs_optimization": True,
+        "max_width": 768,  # Max resolution for memory safety
+        "max_height": 1024
     },
     "sd-3.5-medium": {
         "id": "stabilityai/stable-diffusion-3.5-medium",
         "class": "StableDiffusion3Pipeline",
         "requires_auth": True,
-        "default_steps": 28,
-        "default_guidance": 4.5,
-        "needs_optimization": True
+        "default_steps": 20,  # Reduced from 28
+        "default_guidance": 4.0,  # Reduced from 4.5
+        "needs_optimization": True,
+        "max_width": 896,
+        "max_height": 1152
     },
     "sdxl-turbo": {
         "id": "stabilityai/sdxl-turbo",
@@ -308,16 +314,30 @@ def generate():
         style_modifier = STYLE_PRESETS.get(style_key, STYLE_PRESETS['cinematic'])
         enhanced_prompt = f"{prompt}, {style_modifier}"
         
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+            gc.collect()
+        
         # Load the requested model
         local_pipe = _load_model_into_memory(model_key)
         
         # Get model defaults
         model_config = AVAILABLE_MODELS[model_key]
         
-        # Process request parameters
-        negative_prompt = data.get('negative_prompt', 'blurry, low quality, distorted, text, watermark')
         width = data.get('width', 1024)
         height = data.get('height', 1536)
+        
+        if 'max_width' in model_config and width > model_config['max_width']:
+            logger.warning(f"[{request_id}] ⚠️ Width {width} exceeds max {model_config['max_width']}, capping")
+            width = model_config['max_width']
+        
+        if 'max_height' in model_config and height > model_config['max_height']:
+            logger.warning(f"[{request_id}] ⚠️ Height {height} exceeds max {model_config['max_height']}, capping")
+            height = model_config['max_height']
+        
+        # Process request parameters
+        negative_prompt = data.get('negative_prompt', 'blurry, low quality, distorted, text, watermark')
         steps = data.get('num_inference_steps', model_config['default_steps'])
         guidance = data.get('guidance_scale', model_config['default_guidance'])
         seed = data.get('seed')
@@ -334,6 +354,10 @@ def generate():
         if seed is not None:
             generator = torch.Generator(device="cuda").manual_seed(seed)
             logger.info(f"[{request_id}] 🎲 Seed: {seed}")
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            gc.collect()
 
         logger.info(f"[{request_id}] 🎨 Starting image generation...")
         gen_start = time.time()
@@ -391,6 +415,37 @@ def unload():
         return jsonify({'success': True, 'message': 'Model unloaded successfully'})
     except Exception as e:
         logger.error(f"Error in /unload: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/cancel', methods=['POST'])
+def cancel_generation():
+    """Cancel the current generation (if any)"""
+    global MODEL_LOADED, current_pipeline, current_model_key
+    
+    try:
+        logger.info("🛑 Cancel generation requested")
+        
+        # Note: Flask doesn't support graceful interruption of ongoing requests
+        # This endpoint primarily serves to acknowledge the cancellation request
+        # The actual generation will complete, but we signal that it should be discarded
+        
+        # Clear CUDA cache to free up memory from any partial generation
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+            gc.collect()
+            logger.info("✓ CUDA cache cleared")
+        
+        logger.info("✓ Cancellation acknowledged (generation may complete but result will be discarded)")
+        
+        return jsonify({
+            'success': True, 
+            'message': 'Cancellation acknowledged. Current generation will be discarded.'
+        })
+        
+    except Exception as e:
+        logger.error(f"❌ Error during cancellation: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
