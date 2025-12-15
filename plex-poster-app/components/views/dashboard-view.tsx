@@ -2,12 +2,13 @@
 
 import { useState, useEffect } from "react"
 import { Button } from "@/components/ui/button"
-import { Settings, Film, FolderOpen, RefreshCw, Layers, ImageIcon, ListTodo } from "lucide-react"
+import { Settings, Film, FolderOpen, RefreshCw, Layers, ImageIcon, ListTodo, HardDrive } from "lucide-react"
 import { SettingsPanel } from "@/components/settings-panel"
 import { LibraryGrid } from "@/components/library-grid"
 import { CollectionsView } from "@/components/views/collections-view"
 import { PostersView } from "@/components/views/posters-view"
 import { JobsView } from "@/components/views/jobs-view"
+import { ModelsView } from "@/components/views/models-view"
 
 export function DashboardView() {
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -16,7 +17,9 @@ export function DashboardView() {
   const [serverInfo, setServerInfo] = useState<{ name: string; id: string } | null>(null)
   const [libraries, setLibraries] = useState<any[]>([])
   const [selectedLibrary, setSelectedLibrary] = useState<string | null>(null)
-  const [currentView, setCurrentView] = useState<"libraries" | "collections" | "posters" | "jobs">("libraries")
+  const [currentView, setCurrentView] = useState<"libraries" | "collections" | "posters" | "jobs" | "models">(
+    "libraries",
+  )
   const [hasAttemptedLoad, setHasAttemptedLoad] = useState(false)
   const [isLoadingConfig, setIsLoadingConfig] = useState(true)
   const [isRefreshing, setIsRefreshing] = useState(false)
@@ -247,10 +250,19 @@ export function DashboardView() {
                   <ListTodo className="h-4 w-4" />
                   Jobs
                 </Button>
+                <Button
+                  variant={currentView === "models" ? "default" : "ghost"}
+                  size="sm"
+                  onClick={() => setCurrentView("models")}
+                  className="gap-2"
+                >
+                  <HardDrive className="h-4 w-4" />
+                  Models
+                </Button>
               </div>
             </div>
 
-            {currentView !== "jobs" && (
+            {currentView !== "jobs" && currentView !== "models" && (
               <div className="flex items-center gap-2 overflow-x-auto pb-2">
                 <Button
                   variant={selectedLibrary === null ? "default" : "ghost"}
@@ -310,8 +322,10 @@ export function DashboardView() {
                     : libraries.map((lib) => ({ key: lib.key, title: lib.title, type: lib.type }))
                 }
               />
-            ) : (
+            ) : currentView === "jobs" ? (
               <JobsView libraries={libraries.map((lib) => ({ key: lib.key, title: lib.title }))} />
+            ) : (
+              <ModelsView />
             )}
           </div>
         )}

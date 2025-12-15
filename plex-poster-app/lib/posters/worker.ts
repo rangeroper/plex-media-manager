@@ -106,7 +106,7 @@ async function processQueue(jobId: string): Promise<void> {
 
       try {
         // Generate poster
-        console.log(`[Worker] Generating poster with SD...`)
+        console.log(`[Worker] Generating poster with SD (model: ${job.model}, style: ${job.style})...`)
         const buffer = await generatePoster({
           model: job.model,
           style: job.style,
@@ -134,12 +134,12 @@ async function processQueue(jobId: string): Promise<void> {
 
             // Upload the poster
             await plexClient.uploadPoster(serverUrl, item.ratingKey, buffer)
-            console.log(`[Worker] Successfully uploaded poster to Plex for: ${item.title || item.ratingKey}`)
+            console.log(`[Worker] ✓ Successfully uploaded poster to Plex for: ${item.title || item.ratingKey}`)
           }
         } catch (uploadError) {
           // Log but don't fail the job if upload fails
           const uploadMessage = uploadError instanceof Error ? uploadError.message : String(uploadError)
-          console.error(`[Worker] Failed to upload poster to Plex (continuing anyway):`, uploadMessage)
+          console.error(`[Worker] ❌ Failed to upload poster to Plex (continuing anyway):`, uploadMessage)
         }
 
         // Mark as complete
@@ -201,28 +201,30 @@ async function finishJob(jobId: string): Promise<void> {
  * This ensures the model is only unloaded when all workers and queues are idle.
  */
 export async function unloadSDModelIfQueueEmpty(): Promise<void> {
-  // Check if any item is still waiting in any job queue.
-  const isAnyQueueActive = await checkAllQueuesEmpty()
+  console.log(`[Worker] Checking if model should be unloaded...`)
 
-  if (isAnyQueueActive) {
-    console.log(`[Worker] Global queue is NOT empty. Keeping model loaded for next job.`)
+  const allQueuesEmpty = await checkAllQueuesEmpty()
+
+  if (!allQueuesEmpty) {
+    console.log(`[Worker] ℹ️  Global queue is NOT empty. Keeping model loaded for next job.`)
     return
   }
 
-  // Also check for any jobs marked as 'running' that haven't signaled completion yet
   const activeJobs = await getActiveJobs()
-  const isJobRunningButNoQueue = activeJobs.length > 0 && !activeJobs.every((j) => j.status === "paused")
+  const hasRunningJobs = activeJobs.some((j) => j.status === "running" || j.status === "pending")
 
-  if (isJobRunningButNoQueue) {
-    console.log(
-      `[Worker] Found ${activeJobs.length} active jobs without queue items (potentially paused or finishing). Keeping model loaded.`,
-    )
+  if (hasRunningJobs) {
+    console.log(`[Worker] ℹ️  Found ${activeJobs.length} active jobs. Keeping model loaded.`)
     return
   }
 
-  // If no items are in any queue and no jobs are actively processing, we can unload.
-  console.log(`[Worker] Global queue is empty and no active jobs detected. Sending UNLOAD signal.`)
-  await unloadSDModel()
+  console.log(`[Worker] ✓ All queues empty and no active jobs. Unloading SD model from memory...`)
+  const unloaded = await unloadSDModel()
+  if (unloaded) {
+    console.log(`[Worker] ✓ SD model successfully unloaded from GPU memory`)
+  } else {
+    console.error(`[Worker] ❌ Failed to unload SD model`)
+  }
 }
 
 /**

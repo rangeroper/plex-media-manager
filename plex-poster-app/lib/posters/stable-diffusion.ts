@@ -1,6 +1,6 @@
 // lib/posters/stable-diffusion.ts
 import fetch from "node-fetch"
-import { Buffer } from "buffer"
+import type { Buffer } from "buffer"
 
 interface GeneratePosterOptions {
   model: string
@@ -17,6 +17,8 @@ interface SDAPIResponse {
   path: string
   generation_time: number
   relative_path: string
+  model_used?: string
+  style_used?: string
 }
 
 const GENERATION_TIMEOUT = 120000 // 2 minutes
@@ -30,19 +32,19 @@ const SD_API_URL = process.env.SD_API_URL || "http://sd-api:9090"
  * Build a detailed prompt for movie/show poster generation
  */
 function buildPrompt(options: GeneratePosterOptions): string {
-  const { title, year, type, style } = options
-  
-  const mediaType = type === 'show' ? 'TV series' : 'film'
-  const titleStr = title ? `${title}${year ? ` (${year})` : ''}` : 'media'
-  
-  return `alternative ${mediaType} poster artwork for ${titleStr}, ${style} style, dramatic composition, high contrast lighting, cinematic atmosphere, stylized illustrated realism, community fan-made poster art, no text, no logos, no watermarks, professional poster design, ultra detailed`
+  const { title, year, type } = options
+
+  const mediaType = type === "show" ? "TV series" : "film"
+  const titleStr = title ? `${title}${year ? ` (${year})` : ""}` : "media"
+
+  return `alternative ${mediaType} poster artwork for ${titleStr}, community fan-made poster art, no text, no logos, no watermarks, professional poster design, ultra detailed`
 }
 
 /**
  * Sleep utility
  */
 function sleep(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms))
+  return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 /**
@@ -61,7 +63,7 @@ async function fetchWithTimeout(url: string, options: any, timeoutMs: number): P
     return response
   } catch (error: any) {
     clearTimeout(timeoutId)
-    if (error.name === 'AbortError') {
+    if (error.name === "AbortError") {
       throw new Error(`Request timeout after ${timeoutMs}ms`)
     }
     throw error
@@ -76,7 +78,7 @@ async function fetchWithRetry(
   options: any,
   timeoutMs: number,
   maxRetries: number = CONNECTION_RETRY_ATTEMPTS,
-  retryDelay: number = CONNECTION_RETRY_DELAY
+  retryDelay: number = CONNECTION_RETRY_DELAY,
 ): Promise<any> {
   let lastError: Error | null = null
 
@@ -85,28 +87,30 @@ async function fetchWithRetry(
       return await fetchWithTimeout(url, options, timeoutMs)
     } catch (error: any) {
       lastError = error
-      
+
       // Check if it's a connection error that we should retry
-      const isConnectionError = 
-        error.code === 'ECONNREFUSED' || 
-        error.code === 'ENOTFOUND' ||
-        error.code === 'ETIMEDOUT' ||
-        error.message?.includes('connect') ||
-        error.message?.includes('ECONNREFUSED')
+      const isConnectionError =
+        error.code === "ECONNREFUSED" ||
+        error.code === "ENOTFOUND" ||
+        error.code === "ETIMEDOUT" ||
+        error.message?.includes("connect") ||
+        error.message?.includes("ECONNREFUSED")
 
       if (!isConnectionError || attempt === maxRetries) {
         throw error
       }
 
-      console.log(`[StableDiffusion] Connection attempt ${attempt}/${maxRetries} failed. Retrying in ${retryDelay}ms...`)
+      console.log(
+        `[StableDiffusion] Connection attempt ${attempt}/${maxRetries} failed. Retrying in ${retryDelay}ms...`,
+      )
       await sleep(retryDelay)
-      
+
       // Optional: Exponential backoff
       // retryDelay = Math.min(retryDelay * 1.5, 30000)
     }
   }
 
-  throw lastError || new Error('Failed after retries')
+  throw lastError || new Error("Failed after retries")
 }
 
 /**
@@ -116,13 +120,27 @@ export async function generatePoster(options: GeneratePosterOptions): Promise<Bu
   const { model, style, libraryKey, plexRatingKey } = options
 
   const prompt = buildPrompt(options)
-  const negativePrompt = "blurry, low quality, distorted, text, watermark, signature, logos, words, letters, ugly, deformed"
+  const styleModifiers: Record<string, string> = {
+    cinematic: "cinematic style, dramatic composition, high contrast lighting, cinematic atmosphere",
+    cartoon: "cartoon style, vibrant colors, bold outlines, animated look",
+    anime: "anime style, japanese animation, cel-shaded, dramatic angles",
+    photorealistic: "photorealistic, ultra detailed, 8k, high resolution, realistic lighting",
+    artistic: "artistic style, painterly, expressive brushstrokes, creative composition",
+    noir: "film noir style, black and white, dramatic shadows, moody atmosphere",
+    vibrant: "vibrant colors, saturated, bold, eye-catching, dynamic composition",
+  }
+
+  const stylePrompt = styleModifiers[style] || styleModifiers.cinematic
+  const enhancedPrompt = `${prompt}, ${stylePrompt}`
+
+  const negativePrompt =
+    "blurry, low quality, distorted, text, watermark, signature, logos, words, letters, ugly, deformed"
 
   console.log(`[StableDiffusion] ==================== GENERATION START ====================`)
   console.log(`[StableDiffusion] Item: ${options.title || plexRatingKey}`)
   console.log(`[StableDiffusion] Library: ${libraryKey}, Rating Key: ${plexRatingKey}`)
-  console.log(`[StableDiffusion] Style: ${style}, Model: ${model}`)
-  console.log(`[StableDiffusion] Prompt: ${prompt}`)
+  console.log(`[StableDiffusion] Model: ${model}, Style: ${style}`)
+  console.log(`[StableDiffusion] Prompt: ${enhancedPrompt}`)
   console.log(`[StableDiffusion] API URL: ${SD_API_URL}`)
 
   try {
@@ -136,14 +154,16 @@ export async function generatePoster(options: GeneratePosterOptions): Promise<Bu
     console.log(`[StableDiffusion] ✓ SD API health check passed`)
 
     // Generate the image (with retry for connection issues)
-    console.log(`[StableDiffusion] Sending generation request...`)
+    console.log(`[StableDiffusion] Sending generation request with model=${model}, style=${style}...`)
     const res = await fetchWithRetry(
       `${SD_API_URL}/generate`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          prompt,
+          model, // Include model parameter
+          style, // Include style parameter
+          prompt: enhancedPrompt, // Use enhanced prompt with style modifiers
           negative_prompt: negativePrompt,
           width: 1024,
           height: 1536,
@@ -152,7 +172,7 @@ export async function generatePoster(options: GeneratePosterOptions): Promise<Bu
           seed: null,
         }),
       },
-      GENERATION_TIMEOUT
+      GENERATION_TIMEOUT,
     )
 
     if (!res.ok) {
@@ -175,7 +195,7 @@ export async function generatePoster(options: GeneratePosterOptions): Promise<Bu
       throw new Error(`SD API returned ${res.status}: ${errorText}`)
     }
 
-    const data = await res.json() as SDAPIResponse
+    const data = (await res.json()) as SDAPIResponse
 
     if (!data.filename) {
       console.error(`[StableDiffusion] ❌ No filename in response`)
@@ -184,16 +204,13 @@ export async function generatePoster(options: GeneratePosterOptions): Promise<Bu
     }
 
     console.log(`[StableDiffusion] ✓ Image generated: ${data.filename}`)
+    console.log(`[StableDiffusion] Model used: ${(data as any).model_used || model}`)
+    console.log(`[StableDiffusion] Style used: ${(data as any).style_used || style}`)
     console.log(`[StableDiffusion] Generation time: ${data.generation_time}s`)
 
-    // Fetch the generated image
     console.log(`[StableDiffusion] Downloading generated image...`)
-    const imageRes = await fetchWithTimeout(
-      `${SD_API_URL}/image/${data.filename}`,
-      { method: "GET" },
-      DOWNLOAD_TIMEOUT
-    )
-    
+    const imageRes = await fetchWithTimeout(`${SD_API_URL}/image/${data.filename}`, { method: "GET" }, DOWNLOAD_TIMEOUT)
+
     if (!imageRes.ok) {
       console.error(`[StableDiffusion] ❌ Failed to download image`)
       console.error(`[StableDiffusion] Status: ${imageRes.status}`)
@@ -202,21 +219,22 @@ export async function generatePoster(options: GeneratePosterOptions): Promise<Bu
     }
 
     const buffer = await imageRes.buffer()
-    
+
     if (!buffer || buffer.length === 0) {
       console.error(`[StableDiffusion] ❌ Empty image buffer received`)
       throw new Error("Empty image buffer received")
     }
 
-    console.log(`[StableDiffusion] ✓ Downloaded ${buffer.length} bytes (${(buffer.length / 1024 / 1024).toFixed(2)} MB)`)
+    console.log(
+      `[StableDiffusion] ✓ Downloaded ${buffer.length} bytes (${(buffer.length / 1024 / 1024).toFixed(2)} MB)`,
+    )
     console.log(`[StableDiffusion] ==================== GENERATION SUCCESS ====================`)
 
     return buffer
-
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown Stable Diffusion error"
     const stack = error instanceof Error ? error.stack : undefined
-    
+
     console.error(`[StableDiffusion] ==================== GENERATION FAILED ====================`)
     console.error(`[StableDiffusion] ❌ Error Type: ${error instanceof Error ? error.constructor.name : typeof error}`)
     console.error(`[StableDiffusion] ❌ Error Message: ${message}`)
@@ -232,7 +250,7 @@ export async function generatePoster(options: GeneratePosterOptions): Promise<Bu
     console.error(`[StableDiffusion] 4. Check SD API health: curl http://sd-api:9090/health`)
     console.error(`[StableDiffusion] 5. Verify HUGGINGFACE_TOKEN is set if required`)
     console.error(`[StableDiffusion] ==================================================================`)
-    
+
     throw new Error(`Stable Diffusion generation failed: ${message}`)
   }
 }
@@ -244,32 +262,28 @@ export async function loadSDModel(): Promise<boolean> {
   console.log("[StableDiffusion] ==================== MODEL LOAD START ====================")
   console.log(`[StableDiffusion] Target API: ${SD_API_URL}`)
   console.log("[StableDiffusion] Signalling worker startup to SD API...")
-  
+
   try {
-    const res = await fetchWithRetry(
-      `${SD_API_URL}/health`,
-      { method: "GET" },
-      HEALTH_CHECK_TIMEOUT
-    )
+    const res = await fetchWithRetry(`${SD_API_URL}/health`, { method: "GET" }, HEALTH_CHECK_TIMEOUT)
 
     if (!res.ok) {
       console.error(`[StableDiffusion] ❌ Health check HTTP error: ${res.status}`)
-      const errorText = await res.text().catch(() => 'Unable to read response')
+      const errorText = await res.text().catch(() => "Unable to read response")
       console.error(`[StableDiffusion] Response: ${errorText}`)
       return false
     }
-    
-    const data = await res.json() as any
+
+    const data = (await res.json()) as any
     console.log(`[StableDiffusion] ✓ Health check OK`)
     console.log(`[StableDiffusion] Status: ${data.status}`)
     console.log(`[StableDiffusion] Model Status: ${data.model_status}`)
-    console.log(`[StableDiffusion] GPU: ${data.gpu_name || 'Not detected'}`)
+    console.log(`[StableDiffusion] GPU: ${data.gpu_name || "Not detected"}`)
     console.log("[StableDiffusion] ==================== MODEL LOAD SUCCESS ====================")
-    
-    return data.status === 'ready'
+
+    return data.status === "ready"
   } catch (error) {
     console.error("[StableDiffusion] ==================== MODEL LOAD FAILED ====================")
-    console.error(`[StableDiffusion] ❌ Error: ${error instanceof Error ? error.message : 'Unknown error'}`)
+    console.error(`[StableDiffusion] ❌ Error: ${error instanceof Error ? error.message : "Unknown error"}`)
     console.error("[StableDiffusion] Troubleshooting:")
     console.error("[StableDiffusion]   - Verify sd-api container is running")
     console.error("[StableDiffusion]   - Check network connectivity between containers")
@@ -285,11 +299,7 @@ export async function loadSDModel(): Promise<boolean> {
 export async function unloadSDModel(): Promise<boolean> {
   console.log("[StableDiffusion] Sending request to UNLOAD model...")
   try {
-    const res = await fetchWithRetry(
-      `${SD_API_URL}/unload`,
-      { method: "POST" },
-      HEALTH_CHECK_TIMEOUT
-    )
+    const res = await fetchWithRetry(`${SD_API_URL}/unload`, { method: "POST" }, HEALTH_CHECK_TIMEOUT)
 
     if (!res.ok) {
       console.error(`[StableDiffusion] UNLOAD request failed: ${res.status}`)
@@ -310,32 +320,32 @@ export async function unloadSDModel(): Promise<boolean> {
 export async function checkSDHealth(): Promise<boolean> {
   try {
     console.log(`[StableDiffusion] Running health check against ${SD_API_URL}/health...`)
-    
+
     const res = await fetchWithRetry(
       `${SD_API_URL}/health`,
       {
         method: "GET",
         headers: { "Content-Type": "application/json" },
       },
-      HEALTH_CHECK_TIMEOUT
+      HEALTH_CHECK_TIMEOUT,
     )
 
     if (!res.ok) {
       console.error(`[StableDiffusion] ❌ Health check failed: HTTP ${res.status}`)
-      const errorText = await res.text().catch(() => 'Unable to read response')
+      const errorText = await res.text().catch(() => "Unable to read response")
       console.error(`[StableDiffusion] Response: ${errorText}`)
       return false
     }
 
-    const data = await res.json() as any
+    const data = (await res.json()) as any
     console.log(`[StableDiffusion] ✓ Health check passed`)
     console.log(`[StableDiffusion]   Status: ${data.status}`)
     console.log(`[StableDiffusion]   Model Status: ${data.model_status}`)
-    console.log(`[StableDiffusion]   GPU: ${data.gpu_name || 'Not detected'}`)
-    
-    return data.status === 'ready'
+    console.log(`[StableDiffusion]   GPU: ${data.gpu_name || "Not detected"}`)
+
+    return data.status === "ready"
   } catch (error) {
-    console.error(`[StableDiffusion] ❌ Health check error: ${error instanceof Error ? error.message : 'Unknown'}`)
+    console.error(`[StableDiffusion] ❌ Health check error: ${error instanceof Error ? error.message : "Unknown"}`)
     if (error instanceof Error && error.stack) {
       console.error(`[StableDiffusion] Stack: ${error.stack}`)
     }
@@ -353,40 +363,36 @@ export async function getSDStatus(): Promise<{
   error?: string
 }> {
   console.log(`[StableDiffusion] Fetching SD API status from ${SD_API_URL}/health...`)
-  
+
   try {
-    const res = await fetchWithRetry(
-      `${SD_API_URL}/health`,
-      { method: "GET" },
-      HEALTH_CHECK_TIMEOUT
-    )
+    const res = await fetchWithRetry(`${SD_API_URL}/health`, { method: "GET" }, HEALTH_CHECK_TIMEOUT)
 
     if (!res.ok) {
       const errorText = await res.text()
       console.error(`[StableDiffusion] ❌ Status check failed: ${res.status}`)
       console.error(`[StableDiffusion] Response: ${errorText}`)
-      return { 
-        available: false, 
-        error: `SD API is not responding (${res.status}): ${errorText}` 
+      return {
+        available: false,
+        error: `SD API is not responding (${res.status}): ${errorText}`,
       }
     }
 
-    const data = await res.json() as any
+    const data = (await res.json()) as any
 
     console.log(`[StableDiffusion] ✓ Status retrieved`)
-    console.log(`[StableDiffusion]   Available: ${data.status === 'ready'}`)
-    console.log(`[StableDiffusion]   GPU: ${data.gpu_name || 'Not detected'}`)
-    console.log(`[StableDiffusion]   Model Status: ${data.model_status || 'Unknown'}`)
+    console.log(`[StableDiffusion]   Available: ${data.status === "ready"}`)
+    console.log(`[StableDiffusion]   GPU: ${data.gpu_name || "Not detected"}`)
+    console.log(`[StableDiffusion]   Model Status: ${data.model_status || "Unknown"}`)
 
     return {
-      available: data.status === 'ready',
+      available: data.status === "ready",
       gpu: data.gpu_name,
       model_status: data.model_status,
     }
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : "Unknown error"
     console.error(`[StableDiffusion] ❌ Status check error: ${errorMsg}`)
-    
+
     return {
       available: false,
       error: errorMsg,
