@@ -124,24 +124,48 @@ def _load_model_into_memory(model_key: str):
         if is_large_model:
             logger.info(f"🧠 Large model detected - enabling memory optimizations for 16GB VRAM")
         
-        # Select appropriate pipeline class
-        if model_config['class'] == 'StableDiffusion3Pipeline':
-            pipe = StableDiffusion3Pipeline.from_pretrained(
-                model_dir,
-                torch_dtype=torch.float16,
-                variant="fp16"  # Use FP16 variant if available
-            )
-        elif model_config['class'] == 'StableDiffusionXLPipeline':
-            pipe = StableDiffusionXLPipeline.from_pretrained(
-                model_dir,
-                torch_dtype=torch.float16,
-                variant="fp16"
-            )
-        else:  # DiffusionPipeline
-            pipe = DiffusionPipeline.from_pretrained(
-                model_dir,
-                torch_dtype=torch.float16
-            )
+        load_kwargs = {
+            "torch_dtype": torch.float16
+        }
+        
+        # Try fp16 variant first for compatible models
+        try:
+            if model_config['class'] == 'StableDiffusion3Pipeline':
+                pipe = StableDiffusion3Pipeline.from_pretrained(
+                    model_dir,
+                    variant="fp16",
+                    **load_kwargs
+                )
+            elif model_config['class'] == 'StableDiffusionXLPipeline':
+                pipe = StableDiffusionXLPipeline.from_pretrained(
+                    model_dir,
+                    variant="fp16",
+                    **load_kwargs
+                )
+            else:  # DiffusionPipeline
+                pipe = DiffusionPipeline.from_pretrained(
+                    model_dir,
+                    **load_kwargs
+                )
+            logger.info("✓ Loaded fp16 variant")
+        except (OSError, ValueError) as e:
+            # fp16 variant not available, load full precision
+            logger.info(f"⚠️ fp16 variant not available, loading full precision model")
+            if model_config['class'] == 'StableDiffusion3Pipeline':
+                pipe = StableDiffusion3Pipeline.from_pretrained(
+                    model_dir,
+                    **load_kwargs
+                )
+            elif model_config['class'] == 'StableDiffusionXLPipeline':
+                pipe = StableDiffusionXLPipeline.from_pretrained(
+                    model_dir,
+                    **load_kwargs
+                )
+            else:  # DiffusionPipeline
+                pipe = DiffusionPipeline.from_pretrained(
+                    model_dir,
+                    **load_kwargs
+                )
         
         if is_large_model:
             logger.info("🔧 Applying memory optimizations:")
