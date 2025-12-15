@@ -26,14 +26,16 @@ AVAILABLE_MODELS = {
         "class": "StableDiffusion3Pipeline",
         "requires_auth": True,
         "default_steps": 28,
-        "default_guidance": 4.5
+        "default_guidance": 4.5,
+        "needs_optimization": True
     },
     "sd-3.5-medium": {
         "id": "stabilityai/stable-diffusion-3.5-medium",
         "class": "StableDiffusion3Pipeline",
         "requires_auth": True,
         "default_steps": 28,
-        "default_guidance": 4.5
+        "default_guidance": 4.5,
+        "needs_optimization": True
     },
     "sdxl-turbo": {
         "id": "stabilityai/sdxl-turbo",
@@ -61,8 +63,8 @@ STYLE_PRESETS = {
     "vibrant": "vibrant colors, saturated, bold palette, eye-catching, colorful composition"
 }
 
-pipe = None
-current_model_id = None
+current_pipeline = None
+current_model_key = None
 MODEL_LOADED = False 
 MODELS_BASE_DIR = "/app/models"
 OUTPUT_DIR = os.environ.get("OUTPUT_DIR", "/app/data/sd-output")
@@ -89,16 +91,16 @@ def _load_model_into_memory(model_key: str):
     Load a specific model into GPU memory.
     Unloads any existing model first.
     """
-    global pipe, current_model_id, MODEL_LOADED
+    global current_pipeline, current_model_key, MODEL_LOADED
     
     # If the requested model is already loaded, skip
-    if MODEL_LOADED and current_model_id == model_key:
+    if MODEL_LOADED and current_model_key == model_key:
         logger.info(f"✓ Model '{model_key}' is already loaded in GPU memory")
-        return pipe
+        return current_pipeline
     
     # Unload existing model if any
-    if MODEL_LOADED and current_model_id:
-        logger.info(f"🧹 Unloading current model '{current_model_id}' to load '{model_key}'...")
+    if MODEL_LOADED and current_model_key:
+        logger.info(f"🧹 Unloading current model '{current_model_key}' to load '{model_key}'...")
         _unload_model_from_memory()
     
     # Check if model is downloaded
@@ -131,19 +133,19 @@ def _load_model_into_memory(model_key: str):
         # Try fp16 variant first for compatible models
         try:
             if model_config['class'] == 'StableDiffusion3Pipeline':
-                pipe = StableDiffusion3Pipeline.from_pretrained(
+                current_pipeline = StableDiffusion3Pipeline.from_pretrained(
                     model_dir,
                     variant="fp16",
                     **load_kwargs
                 )
             elif model_config['class'] == 'StableDiffusionXLPipeline':
-                pipe = StableDiffusionXLPipeline.from_pretrained(
+                current_pipeline = StableDiffusionXLPipeline.from_pretrained(
                     model_dir,
                     variant="fp16",
                     **load_kwargs
                 )
             else:  # DiffusionPipeline
-                pipe = DiffusionPipeline.from_pretrained(
+                current_pipeline = DiffusionPipeline.from_pretrained(
                     model_dir,
                     **load_kwargs
                 )
@@ -152,55 +154,60 @@ def _load_model_into_memory(model_key: str):
             # fp16 variant not available, load full precision
             logger.info(f"⚠️ fp16 variant not available, loading full precision model")
             if model_config['class'] == 'StableDiffusion3Pipeline':
-                pipe = StableDiffusion3Pipeline.from_pretrained(
+                current_pipeline = StableDiffusion3Pipeline.from_pretrained(
                     model_dir,
                     **load_kwargs
                 )
             elif model_config['class'] == 'StableDiffusionXLPipeline':
-                pipe = StableDiffusionXLPipeline.from_pretrained(
+                current_pipeline = StableDiffusionXLPipeline.from_pretrained(
                     model_dir,
                     **load_kwargs
                 )
             else:  # DiffusionPipeline
-                pipe = DiffusionPipeline.from_pretrained(
+                current_pipeline = DiffusionPipeline.from_pretrained(
                     model_dir,
                     **load_kwargs
                 )
         
-        if is_large_model:
-            logger.info("🔧 Applying aggressive memory optimizations:")
+        if model_config.get('needs_optimization', False):
+            logger.info(f"⚙️ Applying memory optimizations for {model_key}...")
             
-            logger.info("  - Enabling SEQUENTIAL CPU offload (most aggressive, moves each layer individually)")
-            pipe.enable_sequential_cpu_offload()
+            # For SD3 models, use model_cpu_offload instead of sequential to avoid timestep bugs
+            if 'sd-3' in model_key.lower():
+                logger.info("⚙️ Using model CPU offload for SD3 (more stable)")
+                current_pipeline.enable_model_cpu_offload()
+            else:
+                logger.info("⚙️ Using sequential CPU offload for maximum memory savings")
+                current_pipeline.enable_sequential_cpu_offload()
             
             # Enable attention slicing to reduce memory usage
             logger.info("  - Enabling attention slicing")
-            pipe.enable_attention_slicing(slice_size="auto")
+            current_pipeline.enable_attention_slicing(slice_size="auto")
             
-            if hasattr(pipe, 'enable_vae_slicing'):
+            if hasattr(current_pipeline, 'enable_vae_slicing'):
                 logger.info("  - Enabling VAE slicing")
-                pipe.enable_vae_slicing()
+                current_pipeline.enable_vae_slicing()
             else:
                 logger.info("  - VAE slicing not available for this pipeline (SD3)")
             
             # Enable memory efficient attention if available (xformers or PyTorch 2.0)
             try:
-                pipe.enable_xformers_memory_efficient_attention()
+                current_pipeline.enable_xformers_memory_efficient_attention()
                 logger.info("  - Enabled xformers memory efficient attention")
             except Exception:
                 # xformers not available, use PyTorch 2.0 scaled dot product attention
                 try:
-                    pipe.unet.set_attn_processor(None)  # Use default PyTorch 2.0 SDPA
+                    current_pipeline.unet.set_attn_processor(None)  # Use default PyTorch 2.0 SDPA
                     logger.info("  - Using PyTorch 2.0 scaled dot product attention")
                 except Exception:
                     logger.info("  - Memory efficient attention not available")
         else:
             # For smaller models, just move to GPU
-            pipe = pipe.to("cuda")
+            current_pipeline = current_pipeline.to("cuda")
         
         # Update globals
         MODEL_LOADED = True
-        current_model_id = model_key
+        current_model_key = model_key
         
         load_time = time.time() - start_time
         logger.info(f"✅ Model '{model_key}' loaded successfully in {load_time:.2f} seconds")
@@ -215,7 +222,7 @@ def _load_model_into_memory(model_key: str):
         
         logger.info("=" * 80)
         
-        return pipe
+        return current_pipeline
 
     except Exception as e:
         logger.error(f"❌ Failed to load model '{model_key}': {e}")
@@ -224,20 +231,20 @@ def _load_model_into_memory(model_key: str):
 
 def _unload_model_from_memory():
     """Unload the current model from GPU memory"""
-    global pipe, current_model_id, MODEL_LOADED
+    global current_pipeline, current_model_key, MODEL_LOADED
     
     if not MODEL_LOADED:
         logger.info("ℹ️ No model currently loaded in memory")
         return
     
     logger.info("=" * 80)
-    logger.info(f"🧹 Unloading model '{current_model_id}' from GPU memory...")
+    logger.info(f"🧹 Unloading model '{current_model_key}' from GPU memory...")
     
     try:
         # Delete the pipeline
-        if pipe is not None:
-            del pipe
-            pipe = None
+        if current_pipeline is not None:
+            del current_pipeline
+            current_pipeline = None
         
         # Clear CUDA cache
         if torch.cuda.is_available():
@@ -248,8 +255,8 @@ def _unload_model_from_memory():
         gc.collect()
         
         MODEL_LOADED = False
-        old_model = current_model_id
-        current_model_id = None
+        old_model = current_model_key
+        current_model_key = None
         
         # Log memory after unload
         if torch.cuda.is_available():
@@ -394,7 +401,7 @@ def list_models():
     
     for model_key, config in AVAILABLE_MODELS.items():
         is_downloaded = is_model_downloaded(model_key)
-        is_loaded = MODEL_LOADED and current_model_id == model_key
+        is_loaded = MODEL_LOADED and current_model_key == model_key
         
         models_info.append({
             'key': model_key,
@@ -511,7 +518,7 @@ def delete_model():
             return jsonify({'error': 'Invalid or missing model key'}), 400
         
         # Don't allow deleting currently loaded model
-        if MODEL_LOADED and current_model_id == model_key:
+        if MODEL_LOADED and current_model_key == model_key:
             return jsonify({'error': 'Cannot delete currently loaded model. Unload it first.'}), 400
         
         model_dir = get_model_dir(model_key)
@@ -565,7 +572,7 @@ def health():
     return jsonify({
         'status': 'ready',
         'model_loaded': MODEL_LOADED,
-        'current_model': current_model_id,
+        'current_model': current_model_key,
         'available_models': list(AVAILABLE_MODELS.keys()),
         'cuda_available': torch.cuda.is_available(),
         'gpu': gpu_info
