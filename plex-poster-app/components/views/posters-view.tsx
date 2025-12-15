@@ -175,7 +175,16 @@ export function PostersView({ plexUrl, plexToken, libraries = [] }: PostersViewP
       const jobMap: Record<string, string> = {}
 
       for (const lib of libs) {
-        console.log(`[PostersView] Generating for ${lib.title}`)
+        const libSettings = posterConfig.librarySettings?.[lib.key]
+        const model = libSettings?.settings?.model
+        const style = libSettings?.settings?.style
+
+        if (!model || !style) {
+          console.error(`[PostersView] Missing model/style for ${lib.title}. Skipping.`)
+          continue
+        }
+
+        console.log(`[PostersView] Generating for ${lib.title} with model=${model}, style=${style}`)
 
         const res = await fetch("/api/posters/generate", {
           method: "POST",
@@ -183,6 +192,8 @@ export function PostersView({ plexUrl, plexToken, libraries = [] }: PostersViewP
           body: JSON.stringify({
             libraryKey: lib.key,
             provider: "stable-diffusion",
+            model, // Now sending model
+            style, // Now sending style
           }),
         })
 
