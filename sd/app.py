@@ -178,9 +178,11 @@ def _load_model_into_memory(model_key: str):
             logger.info("  - Enabling attention slicing")
             pipe.enable_attention_slicing(slice_size="auto")
             
-            # Enable VAE slicing for large images
-            logger.info("  - Enabling VAE slicing")
-            pipe.enable_vae_slicing()
+            if hasattr(pipe, 'enable_vae_slicing'):
+                logger.info("  - Enabling VAE slicing")
+                pipe.enable_vae_slicing()
+            else:
+                logger.info("  - VAE slicing not available for this pipeline (SD3)")
             
             # Enable memory efficient attention if available (xformers or PyTorch 2.0)
             try:
