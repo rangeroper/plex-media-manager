@@ -55,14 +55,14 @@ def _load_model_if_needed():
         MODEL_LOADED = True
         
         load_time = time.time() - start_time
-        logger.info(f"✅ Model loaded successfully in {load_time:.2f} seconds")
-        logger.info(f"🎮 GPU: {torch.cuda.get_device_name(0)}")
+        logger.info(f"Model loaded successfully in {load_time:.2f} seconds")
+        logger.info(f"GPU: {torch.cuda.get_device_name(0)}")
         logger.info("=" * 80)
         
         return pipe
 
     except Exception as e:
-        logger.error(f"❌ ERROR: Failed to load model from {MODEL_DIR}: {e}")
+        logger.error(f"ERROR: Failed to load model from {MODEL_DIR}: {e}")
         # Re-raise the exception so the generate endpoint can catch it and return 500
         raise RuntimeError("Model initialization failed.") from e
 
