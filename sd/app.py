@@ -122,7 +122,7 @@ def _load_model_into_memory(model_key: str):
         is_large_model = model_key in ['sd-3.5-large', 'sd-3.5-medium']
         
         if is_large_model:
-            logger.info(f"🧠 Large model detected - enabling memory optimizations for 16GB VRAM")
+            logger.info(f"🧠 Large model detected - enabling aggressive memory optimizations for 16GB VRAM")
         
         load_kwargs = {
             "torch_dtype": torch.float16
@@ -168,11 +168,10 @@ def _load_model_into_memory(model_key: str):
                 )
         
         if is_large_model:
-            logger.info("🔧 Applying memory optimizations:")
+            logger.info("🔧 Applying aggressive memory optimizations:")
             
-            # Enable CPU offloading for large components
-            logger.info("  - Enabling model CPU offload (keeps UNet on GPU, moves others to CPU)")
-            pipe.enable_model_cpu_offload()
+            logger.info("  - Enabling SEQUENTIAL CPU offload (most aggressive, moves each layer individually)")
+            pipe.enable_sequential_cpu_offload()
             
             # Enable attention slicing to reduce memory usage
             logger.info("  - Enabling attention slicing")
