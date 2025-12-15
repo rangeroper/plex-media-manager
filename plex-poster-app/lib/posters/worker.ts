@@ -120,12 +120,16 @@ async function processQueue(jobId: string): Promise<void> {
               {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ modelId: job.model }),
+                body: JSON.stringify({ model: job.model }), // Changed from modelId to model
               },
             )
 
             if (!downloadResponse.ok) {
-              throw new Error(`Failed to download model ${job.model}`)
+              const errorData = await downloadResponse.json().catch(() => ({}))
+              console.error(`[Worker] Download failed:`, errorData)
+              throw new Error(
+                `Failed to download model ${job.model}: ${errorData.error || downloadResponse.statusText}`,
+              )
             }
 
             console.log(`[Worker] Model ${job.model} download initiated`)
