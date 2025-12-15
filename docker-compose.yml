@@ -3,9 +3,9 @@ services:
     image: redis:7-alpine
     container_name: plex-poster-redis
     ports:
-      - "6379:6379"
+      - "6382:6379"
     volumes:
-      - /mnt/user/appdata/plex-media-manager/redis:/data  # bind mount
+      - /mnt/user/appdata/plex-media-manager/redis:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -15,7 +15,7 @@ services:
       - plex-media-manager
 
   sd-api:
-    image: brmochel92/sd-api:latest  # Pull from Docker Hub
+    image: brmochel92/sd-api:latest
     container_name: plex-poster-sd-api
     runtime: nvidia
     environment:
@@ -25,10 +25,10 @@ services:
       - MODEL_DIR=/app/models/sdxl-turbo
       - OUTPUT_DIR=/app/data/sd-output
     ports:
-      - "9090:9090"
+      - "9091:9090"
     volumes:
-      - /mnt/user/appdata/plex-media-manager/sd-models:/app/models  # bind mount
-      - /mnt/user/appdata/plex-media-manager/data:/app/data # bind mount
+      - /mnt/user/appdata/plex-media-manager/sd-models:/app/models
+      - /mnt/user/appdata/plex-media-manager/data:/app/data
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9090/health"]
@@ -40,7 +40,7 @@ services:
       - plex-media-manager
 
   app:
-    image: brmochel92/plex-poster-app:latest  # Pull from Docker Hub
+    image: brmochel92/plex-poster-app:latest
     container_name: plex-poster-app
     ports:
       - "3000:3000"

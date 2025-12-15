@@ -4,33 +4,48 @@ on:
   push:
     branches:
       - main
-  workflow_dispatch:  # Allow manual trigger from GitHub UI
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
+    
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - service: plex-poster-app
+            context: ./plex-poster-app
+            image: brmochel92/plex-poster-app
+            needs_space: false
+          - service: sd-api
+            context: ./sd
+            image: brmochel92/sd-api
+            needs_space: true
     
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
       - name: Free up disk space
+        if: matrix.needs_space
         run: |
-          echo "Disk space before cleanup:"
-          df -h
-          echo ""
-          echo "Cleaning up unused tools..."
+          echo "Freeing disk space for ${{ matrix.service }}..."
           sudo rm -rf /usr/share/dotnet
           sudo rm -rf /usr/local/lib/android
           sudo rm -rf /opt/ghc
           sudo rm -rf /opt/hostedtoolcache/CodeQL
           sudo docker image prune --all --force
-          echo ""
-          echo "Disk space after cleanup:"
           df -h
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+        with:
+          buildkitd-flags: --allow-insecure-entitlement network.host
 
       - name: Log in to Docker Hub
         uses: docker/login-action@v3
@@ -38,31 +53,37 @@ jobs:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-      - name: Build and push plex-poster-app
+      - name: Build and push ${{ matrix.service }}
         uses: docker/build-push-action@v5
         with:
-          context: ./plex-poster-app
+          context: ${{ matrix.context }}
           push: true
-          tags: brmochel92/plex-poster-app:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          tags: ${{ matrix.image }}:latest
+          cache-from: |
+            type=registry,ref=${{ matrix.image }}:buildcache
+            type=gha
+          cache-to: |
+            type=registry,ref=${{ matrix.image }}:buildcache,mode=max
+            type=gha,mode=max
+          build-args: |
+            BUILDKIT_INLINE_CACHE=1
 
-      - name: Build and push sd-api
-        uses: docker/build-push-action@v5
-        with:
-          context: ./sd
-          push: true
-          tags: brmochel92/sd-api:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+      - name: Build summary for ${{ matrix.service }}
+        run: |
+          echo "✅ Successfully built ${{ matrix.service }}"
+          echo "📦 Image: ${{ matrix.image }}:latest"
 
+  summary:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    steps:
       - name: Build summary
         run: |
-          echo "✅ Successfully built and pushed to Docker Hub!"
+          echo "🎉 All images built and pushed successfully!"
           echo ""
           echo "📦 Images available at:"
           echo "   - brmochel92/plex-poster-app:latest"
           echo "   - brmochel92/sd-api:latest"
           echo ""
-          echo "🚀 To pull on Unraid, run:"
+          echo "🚀 To pull and restart on your server:"
           echo "   docker-compose pull && docker-compose up -d"

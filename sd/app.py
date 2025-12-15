@@ -1,11 +1,12 @@
 from flask import Flask, request, jsonify, send_file
-from diffusers import StableDiffusionXLPipeline
+from diffusers import StableDiffusionXLPipeline, StableDiffusion3Pipeline, DiffusionPipeline
 import torch
 import os
 from pathlib import Path
 from datetime import datetime
 import logging
 import time
+import gc
 
 # Configure logging
 logging.basicConfig(
@@ -17,109 +18,258 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
-# --- LAZY LOADING: GLOBAL VARIABLES ---
-# The model pipeline object will be stored here once loaded.
-pipe = None
-MODEL_LOADED = False 
+AVAILABLE_MODELS = {
+    "sd-3.5-large": {
+        "id": "stabilityai/stable-diffusion-3.5-large",
+        "class": "StableDiffusion3Pipeline",
+        "requires_auth": True,
+        "default_steps": 28,
+        "default_guidance": 4.5
+    },
+    "sd-3.5-medium": {
+        "id": "stabilityai/stable-diffusion-3.5-medium",
+        "class": "StableDiffusion3Pipeline",
+        "requires_auth": True,
+        "default_steps": 28,
+        "default_guidance": 4.5
+    },
+    "sdxl-turbo": {
+        "id": "stabilityai/sdxl-turbo",
+        "class": "StableDiffusionXLPipeline",
+        "requires_auth": False,
+        "default_steps": 4,
+        "default_guidance": 1.0
+    },
+    "sd-1.5": {
+        "id": "runwayml/stable-diffusion-v1-5",
+        "class": "DiffusionPipeline",
+        "requires_auth": False,
+        "default_steps": 50,
+        "default_guidance": 7.5
+    }
+}
 
-MODEL_DIR = os.environ.get("MODEL_DIR", "/app/models/sdxl-turbo")
+STYLE_PRESETS = {
+    "cinematic": "cinematic style, dramatic composition, high contrast lighting, cinematic atmosphere, stylized illustrated realism",
+    "cartoon": "cartoon style, bold outlines, vibrant colors, stylized character design, animated look",
+    "anime": "anime style, manga art, cel shaded, vibrant colors, detailed line art, Japanese animation aesthetic",
+    "photorealistic": "photorealistic, hyper detailed, 8k resolution, realistic lighting, professional photography",
+    "artistic": "artistic style, painterly, expressive brushstrokes, fine art aesthetic, gallery quality",
+    "film-noir": "film noir style, black and white, dramatic shadows, high contrast, classic cinema aesthetic",
+    "vibrant": "vibrant colors, saturated, bold palette, eye-catching, colorful composition"
+}
+
+pipe = None
+current_model_id = None
+MODEL_LOADED = False 
+MODELS_BASE_DIR = "/app/models"
 OUTPUT_DIR = os.environ.get("OUTPUT_DIR", "/app/data/sd-output")
 Path(OUTPUT_DIR).mkdir(parents=True, exist_ok=True)
+Path(MODELS_BASE_DIR).mkdir(parents=True, exist_ok=True)
 
 
-def _load_model_if_needed():
+def get_model_dir(model_key: str) -> str:
+    """Get the directory path for a specific model"""
+    return os.path.join(MODELS_BASE_DIR, model_key)
+
+
+def is_model_downloaded(model_key: str) -> bool:
+    """Check if a model has been downloaded"""
+    model_dir = get_model_dir(model_key)
+    if not os.path.exists(model_dir):
+        return False
+    # Check if directory has files
+    return len(list(Path(model_dir).iterdir())) > 0
+
+
+def _load_model_into_memory(model_key: str):
     """
-    Initializes the model pipeline if it hasn't been loaded yet.
-    This function handles the 'cold start' for image generation.
+    Load a specific model into GPU memory.
+    Unloads any existing model first.
     """
-    global pipe, MODEL_LOADED
+    global pipe, current_model_id, MODEL_LOADED
     
-    if MODEL_LOADED:
+    # If the requested model is already loaded, skip
+    if MODEL_LOADED and current_model_id == model_key:
+        logger.info(f"✓ Model '{model_key}' is already loaded in GPU memory")
         return pipe
-
-    # --- MODEL LOADING LOGIC (Moved from global scope) ---
+    
+    # Unload existing model if any
+    if MODEL_LOADED and current_model_id:
+        logger.info(f"🧹 Unloading current model '{current_model_id}' to load '{model_key}'...")
+        _unload_model_from_memory()
+    
+    # Check if model is downloaded
+    if not is_model_downloaded(model_key):
+        raise RuntimeError(f"Model '{model_key}' is not downloaded. Please download it first via /models/download")
+    
+    model_config = AVAILABLE_MODELS.get(model_key)
+    if not model_config:
+        raise RuntimeError(f"Unknown model: {model_key}")
+    
+    model_dir = get_model_dir(model_key)
+    
     logger.info("=" * 80)
-    logger.info("⏳ First generation request received. Loading SDXL Turbo model into GPU memory...")
-    logger.info(f"📂 Model directory: {MODEL_DIR}")
+    logger.info(f"⏳ Loading model '{model_key}' into GPU memory...")
+    logger.info(f"📂 Model directory: {model_dir}")
+    logger.info(f"🎯 Pipeline class: {model_config['class']}")
     start_time = time.time()
     
     try:
-        # Load the model from the persisted volume directory
-        pipe = StableDiffusionXLPipeline.from_pretrained(
-            MODEL_DIR,
-            torch_dtype=torch.float16
-        )
+        # Select appropriate pipeline class
+        if model_config['class'] == 'StableDiffusion3Pipeline':
+            pipe = StableDiffusion3Pipeline.from_pretrained(
+                model_dir,
+                torch_dtype=torch.float16
+            )
+        elif model_config['class'] == 'StableDiffusionXLPipeline':
+            pipe = StableDiffusionXLPipeline.from_pretrained(
+                model_dir,
+                torch_dtype=torch.float16
+            )
+        else:  # DiffusionPipeline
+            pipe = DiffusionPipeline.from_pretrained(
+                model_dir,
+                torch_dtype=torch.float16
+            )
+        
         pipe = pipe.to("cuda")
         
         # Update globals
         MODEL_LOADED = True
+        current_model_id = model_key
         
         load_time = time.time() - start_time
-        logger.info(f"Model loaded successfully in {load_time:.2f} seconds")
-        logger.info(f"GPU: {torch.cuda.get_device_name(0)}")
+        logger.info(f"✅ Model '{model_key}' loaded successfully in {load_time:.2f} seconds")
+        logger.info(f"🎮 GPU: {torch.cuda.get_device_name(0)}")
+        
+        # Log GPU memory usage
+        if torch.cuda.is_available():
+            memory_allocated = torch.cuda.memory_allocated(0) / 1024**3
+            memory_reserved = torch.cuda.memory_reserved(0) / 1024**3
+            logger.info(f"💾 GPU Memory: {memory_allocated:.2f} GB allocated, {memory_reserved:.2f} GB reserved")
+        
         logger.info("=" * 80)
         
         return pipe
 
     except Exception as e:
-        logger.error(f"ERROR: Failed to load model from {MODEL_DIR}: {e}")
-        # Re-raise the exception so the generate endpoint can catch it and return 500
-        raise RuntimeError("Model initialization failed.") from e
+        logger.error(f"❌ Failed to load model '{model_key}': {e}")
+        raise RuntimeError(f"Model initialization failed for '{model_key}'") from e
 
 
-# Log that the server is ready without the model loaded
+def _unload_model_from_memory():
+    """Unload the current model from GPU memory"""
+    global pipe, current_model_id, MODEL_LOADED
+    
+    if not MODEL_LOADED:
+        logger.info("ℹ️ No model currently loaded in memory")
+        return
+    
+    logger.info("=" * 80)
+    logger.info(f"🧹 Unloading model '{current_model_id}' from GPU memory...")
+    
+    try:
+        # Delete the pipeline
+        if pipe is not None:
+            del pipe
+            pipe = None
+        
+        # Clear CUDA cache
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+        
+        # Force garbage collection
+        gc.collect()
+        
+        MODEL_LOADED = False
+        old_model = current_model_id
+        current_model_id = None
+        
+        # Log memory after unload
+        if torch.cuda.is_available():
+            memory_allocated = torch.cuda.memory_allocated(0) / 1024**3
+            memory_reserved = torch.cuda.memory_reserved(0) / 1024**3
+            logger.info(f"💾 GPU Memory after unload: {memory_allocated:.2f} GB allocated, {memory_reserved:.2f} GB reserved")
+        
+        logger.info(f"✅ Model '{old_model}' unloaded successfully and GPU memory cleared")
+        logger.info("=" * 80)
+        
+    except Exception as e:
+        logger.error(f"❌ Error unloading model: {e}")
+        raise
+
+
+# Log that the server is ready
 logger.info("=" * 80)
-logger.info(f"🚀 SD-API server starting... Model will load ON DEMAND (lazy loading enabled).")
-logger.info(f"📂 Model directory: {MODEL_DIR}")
+logger.info("🚀 SD-API server starting (NO models pre-loaded)")
+logger.info(f"📂 Models base directory: {MODELS_BASE_DIR}")
 logger.info(f"📂 Output directory: {OUTPUT_DIR}")
 logger.info(f"🎮 CUDA available: {torch.cuda.is_available()}")
-logger.info(f"🚀 API server ready on port 9090")
+if torch.cuda.is_available():
+    logger.info(f"🎮 GPU: {torch.cuda.get_device_name(0)}")
+logger.info(f"📋 Available models: {', '.join(AVAILABLE_MODELS.keys())}")
+logger.info("🚀 API server ready on port 9090")
 logger.info("=" * 80)
 
 
 @app.route('/generate', methods=['POST'])
 def generate():
-    """
-    Generate an image from a text prompt. The model is loaded into memory 
-    only on the first call to this endpoint.
-    """
+    """Generate an image from a text prompt with specified model and style"""
     request_id = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     
     try:
-        # 1. Load the model (this will be fast after the first call)
-        local_pipe = _load_model_if_needed() 
-        
-        # 2. Process request data
         data = request.json
+        
+        model_key = data.get('model', 'sdxl-turbo')
+        style_key = data.get('style', 'cinematic')
         prompt = data.get('prompt')
+        
         if not prompt:
             logger.warning(f"[{request_id}] ❌ Request missing prompt")
             return jsonify({'error': 'prompt is required'}), 400
-
-        negative_prompt = data.get('negative_prompt', '')
+        
+        # Validate model
+        if model_key not in AVAILABLE_MODELS:
+            return jsonify({'error': f'Invalid model: {model_key}'}), 400
+        
+        style_modifier = STYLE_PRESETS.get(style_key, STYLE_PRESETS['cinematic'])
+        enhanced_prompt = f"{prompt}, {style_modifier}"
+        
+        # Load the requested model
+        local_pipe = _load_model_into_memory(model_key)
+        
+        # Get model defaults
+        model_config = AVAILABLE_MODELS[model_key]
+        
+        # Process request parameters
+        negative_prompt = data.get('negative_prompt', 'blurry, low quality, distorted, text, watermark')
         width = data.get('width', 1024)
-        height = data.get('height', 1024)
-        steps = data.get('num_inference_steps', 4)
-        guidance = data.get('guidance_scale', 1.0)
+        height = data.get('height', 1536)
+        steps = data.get('num_inference_steps', model_config['default_steps'])
+        guidance = data.get('guidance_scale', model_config['default_guidance'])
         seed = data.get('seed')
 
         logger.info("=" * 80)
         logger.info(f"[{request_id}] 📥 NEW GENERATION REQUEST")
-        logger.info(f"[{request_id}] 📝 Prompt: {prompt}")
-        # ... (other logging as before) ...
+        logger.info(f"[{request_id}] 🎨 Model: {model_key}")
+        logger.info(f"[{request_id}] 🎭 Style: {style_key}")
+        logger.info(f"[{request_id}] 📝 Enhanced Prompt: {enhanced_prompt}")
+        logger.info(f"[{request_id}] ⚙️ Parameters: {width}x{height}, {steps} steps, guidance {guidance}")
         
         # Set seed if provided
         generator = None
         if seed is not None:
             generator = torch.Generator(device="cuda").manual_seed(seed)
-            logger.info(f"[{request_id}] ✅ Seed set to {seed}")
+            logger.info(f"[{request_id}] 🎲 Seed: {seed}")
 
         logger.info(f"[{request_id}] 🎨 Starting image generation...")
         gen_start = time.time()
         
-        # 3. Use the pipeline
-        image = local_pipe( # Use the local_pipe variable (which is the loaded model)
-            prompt=prompt,
+        # Generate image
+        image = local_pipe(
+            prompt=enhanced_prompt,
             negative_prompt=negative_prompt,
             width=width,
             height=height,
@@ -131,7 +281,7 @@ def generate():
         gen_time = time.time() - gen_start
         logger.info(f"[{request_id}] ✅ Generation completed in {gen_time:.2f}s")
 
-        # ... (saving logic as before) ...
+        # Save image
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"{timestamp}.png"
         filepath = os.path.join(OUTPUT_DIR, filename)
@@ -149,6 +299,8 @@ def generate():
             'filename': filename,
             'path': filepath,
             'generation_time': round(gen_time, 2),
+            'model_used': model_key,
+            'style_used': style_key,
             'relative_path': f'/data/sd-output/{filename}'
         })
     
@@ -159,9 +311,150 @@ def generate():
         logger.error("=" * 80)
         return jsonify({'error': str(e)}), 500
 
+
+@app.route('/unload', methods=['POST'])
+def unload():
+    """Unload the current model from GPU memory"""
+    try:
+        _unload_model_from_memory()
+        return jsonify({'success': True, 'message': 'Model unloaded successfully'})
+    except Exception as e:
+        logger.error(f"Error in /unload: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/models', methods=['GET'])
+def list_models():
+    """List all available models with download status"""
+    models_info = []
+    
+    for model_key, config in AVAILABLE_MODELS.items():
+        is_downloaded = is_model_downloaded(model_key)
+        is_loaded = MODEL_LOADED and current_model_id == model_key
+        
+        models_info.append({
+            'key': model_key,
+            'id': config['id'],
+            'downloaded': is_downloaded,
+            'loaded_in_memory': is_loaded,
+            'requires_auth': config['requires_auth'],
+            'pipeline_class': config['class']
+        })
+    
+    return jsonify({'models': models_info})
+
+
+@app.route('/models/download', methods=['POST'])
+def download_model():
+    """Download a model to local storage"""
+    try:
+        data = request.json
+        model_key = data.get('model')
+        
+        if not model_key or model_key not in AVAILABLE_MODELS:
+            return jsonify({'error': 'Invalid or missing model key'}), 400
+        
+        if is_model_downloaded(model_key):
+            return jsonify({
+                'success': True,
+                'message': f'Model {model_key} is already downloaded',
+                'already_downloaded': True
+            })
+        
+        model_config = AVAILABLE_MODELS[model_key]
+        model_dir = get_model_dir(model_key)
+        
+        logger.info("=" * 80)
+        logger.info(f"📥 Starting download for model: {model_key}")
+        logger.info(f"🔗 Model ID: {model_config['id']}")
+        logger.info(f"📂 Target directory: {model_dir}")
+        logger.info("⏳ This may take several minutes...")
+        logger.info("=" * 80)
+        
+        start_time = time.time()
+        
+        # Get HuggingFace token if required
+        hf_token = os.environ.get("HUGGINGFACE_TOKEN") if model_config['requires_auth'] else None
+        
+        # Download based on pipeline class
+        if model_config['class'] == 'StableDiffusion3Pipeline':
+            pipeline = StableDiffusion3Pipeline.from_pretrained(
+                model_config['id'],
+                token=hf_token
+            )
+        elif model_config['class'] == 'StableDiffusionXLPipeline':
+            pipeline = StableDiffusionXLPipeline.from_pretrained(
+                model_config['id'],
+                token=hf_token
+            )
+        else:
+            pipeline = DiffusionPipeline.from_pretrained(
+                model_config['id'],
+                token=hf_token
+            )
+        
+        # Save to local directory
+        pipeline.save_pretrained(model_dir)
+        
+        # Clean up pipeline from memory (don't keep it loaded)
+        del pipeline
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        
+        download_time = time.time() - start_time
+        
+        logger.info("=" * 80)
+        logger.info(f"✅ Model {model_key} downloaded successfully in {download_time:.2f}s")
+        logger.info(f"📂 Saved to: {model_dir}")
+        logger.info("=" * 80)
+        
+        return jsonify({
+            'success': True,
+            'message': f'Model {model_key} downloaded successfully',
+            'download_time': round(download_time, 2)
+        })
+        
+    except Exception as e:
+        logger.error(f"❌ Error downloading model: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/models/delete', methods=['POST'])
+def delete_model():
+    """Delete a downloaded model"""
+    try:
+        data = request.json
+        model_key = data.get('model')
+        
+        if not model_key or model_key not in AVAILABLE_MODELS:
+            return jsonify({'error': 'Invalid or missing model key'}), 400
+        
+        # Don't allow deleting currently loaded model
+        if MODEL_LOADED and current_model_id == model_key:
+            return jsonify({'error': 'Cannot delete currently loaded model. Unload it first.'}), 400
+        
+        model_dir = get_model_dir(model_key)
+        
+        if not os.path.exists(model_dir):
+            return jsonify({'success': True, 'message': 'Model was not downloaded'})
+        
+        logger.info(f"🗑️ Deleting model: {model_key} from {model_dir}")
+        
+        import shutil
+        shutil.rmtree(model_dir)
+        
+        logger.info(f"✅ Model {model_key} deleted successfully")
+        
+        return jsonify({'success': True, 'message': f'Model {model_key} deleted successfully'})
+        
+    except Exception as e:
+        logger.error(f"❌ Error deleting model: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @app.route('/image/<filename>')
 def get_image(filename):
-    # ... (no change needed here) ...
     """Get a generated image by filename"""
     filepath = os.path.join(OUTPUT_DIR, filename)
     if not os.path.exists(filepath):
@@ -171,18 +464,31 @@ def get_image(filename):
     logger.info(f"📤 Serving image: {filename}")
     return send_file(filepath, mimetype='image/png')
 
+
 @app.route('/health')
 def health():
-    """Health check endpoint: Reports model status without loading it."""
+    """Health check endpoint with detailed model status"""
     logger.info("💓 Health check requested")
+    
+    gpu_info = None
+    if torch.cuda.is_available():
+        memory_allocated = torch.cuda.memory_allocated(0) / 1024**3
+        memory_reserved = torch.cuda.memory_reserved(0) / 1024**3
+        gpu_info = {
+            'name': torch.cuda.get_device_name(0),
+            'memory_allocated_gb': round(memory_allocated, 2),
+            'memory_reserved_gb': round(memory_reserved, 2)
+        }
+    
     return jsonify({
         'status': 'ready',
-        'model_status': 'loaded' if MODEL_LOADED else 'lazy_waiting', # NEW STATUS
-        'model': MODEL_DIR,
-        'output_dir': OUTPUT_DIR,
+        'model_loaded': MODEL_LOADED,
+        'current_model': current_model_id,
+        'available_models': list(AVAILABLE_MODELS.keys()),
         'cuda_available': torch.cuda.is_available(),
-        'gpu_name': torch.cuda.get_device_name(0) if torch.cuda.is_available() else None
+        'gpu': gpu_info
     })
+
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=9090, debug=False)
