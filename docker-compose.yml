@@ -5,7 +5,7 @@ services:
     ports:
       - "6379:6379"
     volumes:
-      - redis-data:/data
+      - /mnt/user/appdata/plex-media-manager/redis:/data  # bind mount
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -27,8 +27,8 @@ services:
     ports:
       - "9090:9090"
     volumes:
-      - sd-models:/app/models          # Persist downloaded models
-      - ./data:/app/data                # Share data directory with main app
+      - /mnt/user/appdata/plex-media-manager/sd-models:/app/models  # bind mount
+      - /mnt/user/appdata/plex-media-manager/data:/app/data # bind mount
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9090/health"]
@@ -48,8 +48,8 @@ services:
       - REDIS_URL=redis://redis:6379
       - SD_API_URL=http://sd-api:9090
     volumes:
-      - ./data:/app/data
-      - ./uploads:/app/uploads
+      - /mnt/user/appdata/plex-media-manager/data:/app/data
+      - /mnt/user/appdata/plex-media-manager/uploads:/app/uploads
     depends_on:
       redis:
         condition: service_healthy
@@ -57,10 +57,6 @@ services:
         condition: service_healthy
     networks:
       - plex-media-manager
-
-volumes:
-  redis-data:
-  sd-models:
 
 networks:
   plex-media-manager:
