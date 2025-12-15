@@ -97,6 +97,7 @@ async function processQueue(jobId: string): Promise<void> {
       job.currentItemIndex = currentIndex
       job.currentItemRatingKey = item.ratingKey
       job.remainingItems = remainingItems
+      job.progress = Math.round(((currentIndex - 1) / job.totalItems) * 100)
       await saveJob(job)
 
       console.log(
@@ -169,8 +170,14 @@ async function processQueue(jobId: string): Promise<void> {
           }
         }
 
-        // Generate poster
         console.log(`[Worker] Generating poster with SD (model: ${job.model}, style: ${job.style})...`)
+        const updatedJobBeforeGen = await getJob(jobId)
+        if (updatedJobBeforeGen) {
+          updatedJobBeforeGen.currentItem = `Generating: ${item.title || item.ratingKey}`
+          await saveJob(updatedJobBeforeGen)
+        }
+
+        // Generate poster
         const buffer = await generatePoster({
           model: job.model,
           style: job.style,
@@ -180,6 +187,12 @@ async function processQueue(jobId: string): Promise<void> {
           year: item.year,
           type: item.type,
         })
+
+        const updatedJobAfterGen = await getJob(jobId)
+        if (updatedJobAfterGen) {
+          updatedJobAfterGen.currentItem = `Saving: ${item.title || item.ratingKey}`
+          await saveJob(updatedJobAfterGen)
+        }
 
         // Save poster to disk
         const posterPath = await PosterStorage.saveGeneratedPoster(item.libraryKey, item.ratingKey, buffer)
@@ -196,6 +209,12 @@ async function processQueue(jobId: string): Promise<void> {
             const plexClient = new PlexClient(plexConfig.authToken)
             const serverUrl = plexConfig.selectedServer.url
 
+            const updatedJobBeforeUpload = await getJob(jobId)
+            if (updatedJobBeforeUpload) {
+              updatedJobBeforeUpload.currentItem = `Uploading to Plex: ${item.title || item.ratingKey}`
+              await saveJob(updatedJobBeforeUpload)
+            }
+
             // Upload the poster
             await plexClient.uploadPoster(serverUrl, item.ratingKey, buffer)
             console.log(`[Worker] ✓ Successfully uploaded poster to Plex for: ${item.title || item.ratingKey}`)
@@ -211,11 +230,13 @@ async function processQueue(jobId: string): Promise<void> {
 
         const updatedJob = await getJob(jobId)
         if (updatedJob) {
-          const progress = Math.round(
+          updatedJob.progress = Math.round(
             ((updatedJob.completedItems + updatedJob.failedItems) / updatedJob.totalItems) * 100,
           )
+          await saveJob(updatedJob)
+
           console.log(
-            `[Worker] Progress: ${progress}% (${updatedJob.completedItems} completed, ${updatedJob.failedItems} failed)`,
+            `[Worker] Progress: ${updatedJob.progress}% (${updatedJob.completedItems} completed, ${updatedJob.failedItems} failed)`,
           )
         }
       } catch (error) {

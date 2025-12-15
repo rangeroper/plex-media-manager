@@ -333,7 +333,7 @@ export function PostersView({ plexUrl, plexToken, libraries = [] }: PostersViewP
           <div className="mb-4 p-3 bg-muted rounded-lg">
             <div className="flex justify-between items-center">
               <span className="text-sm font-medium">Overall Progress</span>
-              <span className="text-sm font-bold">{totalProgress}%</span>
+              <span className="text-sm font-bold">{isNaN(totalProgress) ? 0 : totalProgress}%</span>
             </div>
             <div className="mt-2 text-xs text-muted-foreground space-y-1">
               <div>Completed: {totalCompleted} items</div>
@@ -345,6 +345,8 @@ export function PostersView({ plexUrl, plexToken, libraries = [] }: PostersViewP
           <div className="space-y-4">
             {generationTasks.map((task) => {
               const taskData = tasks.find((t) => t.id === task.id)
+              const displayProgress = isNaN(task.progress) ? 0 : task.progress
+
               return (
                 <div key={task.id} className="space-y-2 p-4 border border-border rounded-lg bg-card/50">
                   <div className="flex justify-between items-start">
@@ -367,7 +369,7 @@ export function PostersView({ plexUrl, plexToken, libraries = [] }: PostersViewP
                       </div>
                       <p className="text-xs text-muted-foreground font-mono">Library Key: {task.libraryKey}</p>
                     </div>
-                    <span className="text-2xl font-bold">{task.progress}%</span>
+                    <span className="text-2xl font-bold">{displayProgress}%</span>
                   </div>
 
                   <div className="flex justify-between text-sm">
@@ -395,7 +397,7 @@ export function PostersView({ plexUrl, plexToken, libraries = [] }: PostersViewP
                   <div className="w-full bg-secondary rounded-full h-2.5 mt-2">
                     <div
                       className="bg-primary h-2.5 rounded-full transition-all duration-500 ease-out"
-                      style={{ width: `${task.progress}%` }}
+                      style={{ width: `${displayProgress}%` }}
                     />
                   </div>
                 </div>

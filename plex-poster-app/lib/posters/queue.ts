@@ -29,6 +29,7 @@ export interface PosterJob {
   jobId: string
   libraryKey: string
   status: "pending" | "running" | "paused" | "completed" | "failed"
+  progress: number
   totalItems: number
   completedItems: number
   failedItems: number
@@ -64,6 +65,7 @@ export async function createPosterJob(
     jobId,
     libraryKey,
     status: "pending",
+    progress: 0,
     totalItems: items.length,
     completedItems: 0,
     failedItems: 0,
@@ -170,6 +172,7 @@ export async function completeItem(jobId: string, itemId: string): Promise<void>
   if (job) {
     job.completedItems++
     job.currentItem = undefined
+    job.progress = (job.completedItems / job.totalItems) * 100
     await saveJob(job)
   }
 
@@ -200,6 +203,7 @@ export async function failItem(jobId: string, item: QueueItem, error: string): P
         title: item.title,
         error: item.lastError || "Unknown error",
       })
+      job.progress = (job.completedItems / job.totalItems) * 100
       await saveJob(job)
     }
 

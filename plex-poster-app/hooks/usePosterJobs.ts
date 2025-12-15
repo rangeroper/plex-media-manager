@@ -140,7 +140,16 @@ export function usePosterJobs(jobIds: string[], options: UsePosterJobsOptions = 
 
   const isGenerating = tasks.some((t) => t.status === "running" || t.status === "pending")
 
-  const totalProgress = tasks.length > 0 ? Math.round(tasks.reduce((sum, t) => sum + t.progress, 0) / tasks.length) : 0
+  const totalProgress =
+    tasks.length > 0
+      ? Math.round(
+          tasks.reduce((sum, t) => {
+            // Ensure progress is a valid number, default to 0 if NaN
+            const progress = isNaN(t.progress) ? 0 : t.progress
+            return sum + progress
+          }, 0) / tasks.length,
+        )
+      : 0
 
   const totalCompleted = tasks.reduce((sum, t) => sum + t.completedItems, 0)
   const totalFailed = tasks.reduce((sum, t) => sum + t.failedItems, 0)
