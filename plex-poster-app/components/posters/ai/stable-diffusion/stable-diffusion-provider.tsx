@@ -21,8 +21,8 @@ interface StableDiffusionProviderProps {
 }
 
 const AVAILABLE_MODELS = [
-  { value: "sd35-large", label: "SD 3.5 Large (Best Quality)" },
-  { value: "sd35-medium", label: "SD 3.5 Medium (Balanced)" },
+  { value: "sd-3.5-large", label: "SD 3.5 Large (Best Quality)" },
+  { value: "sd-3.5-medium", label: "SD 3.5 Medium (Balanced)" },
   { value: "sdxl-turbo", label: "SDXL Turbo (Fastest)" },
   { value: "sd-1.5", label: "SD 1.5 (Classic)" },
 ]
@@ -38,8 +38,8 @@ const AVAILABLE_STYLES = [
 ]
 
 export function StableDiffusionProvider({ libraries, onStartGeneration, isGenerating }: StableDiffusionProviderProps) {
-  const [selectedStyle, setSelectedStyle] = useState("cinematic")
-  const [selectedModel, setSelectedModel] = useState("sd35-large")
+  const [selectedStyle, setSelectedStyle] = useState<string>("")
+  const [selectedModel, setSelectedModel] = useState<string>("")
   const { toast } = useToast()
 
   const isExpanded = libraries.length > 0
@@ -69,6 +69,15 @@ export function StableDiffusionProvider({ libraries, onStartGeneration, isGenera
   }, [libraries])
 
   const handleStartGeneration = async () => {
+    if (!selectedModel || !selectedStyle) {
+      toast({
+        title: "Configuration Required",
+        description: "Please select both a model and style before generating",
+        variant: "destructive",
+      })
+      return
+    }
+
     try {
       const validLibraries = libraries.filter((lib) => lib.key && lib.key !== "undefined")
 
@@ -80,6 +89,8 @@ export function StableDiffusionProvider({ libraries, onStartGeneration, isGenera
         })
         return
       }
+
+      console.log(`[SD Provider] Saving settings: model=${selectedModel}, style=${selectedStyle}`)
 
       // Save settings for all selected libraries
       await Promise.all(
@@ -130,10 +141,10 @@ export function StableDiffusionProvider({ libraries, onStartGeneration, isGenera
         {isExpanded && (
           <div className="space-y-4 pt-4 border-t">
             <div className="space-y-2">
-              <Label htmlFor="model-select">Model</Label>
+              <Label htmlFor="model-select">Model *</Label>
               <Select value={selectedModel} onValueChange={setSelectedModel}>
                 <SelectTrigger id="model-select">
-                  <SelectValue placeholder="Select model" />
+                  <SelectValue placeholder="Select a model..." />
                 </SelectTrigger>
                 <SelectContent>
                   {AVAILABLE_MODELS.map((model) => (
@@ -147,10 +158,10 @@ export function StableDiffusionProvider({ libraries, onStartGeneration, isGenera
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="style-select">Style</Label>
+              <Label htmlFor="style-select">Style *</Label>
               <Select value={selectedStyle} onValueChange={setSelectedStyle}>
                 <SelectTrigger id="style-select">
-                  <SelectValue placeholder="Select style" />
+                  <SelectValue placeholder="Select a style..." />
                 </SelectTrigger>
                 <SelectContent>
                   {AVAILABLE_STYLES.map((style) => (
@@ -165,13 +176,19 @@ export function StableDiffusionProvider({ libraries, onStartGeneration, isGenera
 
             <div className="flex items-center justify-between pt-4 border-t">
               <div className="space-y-1">
-                <p className="text-sm font-medium">Ready to generate</p>
-                <p className="text-xs text-muted-foreground">Settings will be saved automatically when you start</p>
+                <p className="text-sm font-medium">
+                  {selectedModel && selectedStyle ? "Ready to generate" : "Configuration required"}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {selectedModel && selectedStyle
+                    ? "Settings will be saved automatically when you start"
+                    : "Please select both model and style"}
+                </p>
               </div>
 
               <Button
                 onClick={handleStartGeneration}
-                disabled={libraries.length === 0 || isGenerating}
+                disabled={libraries.length === 0 || isGenerating || !selectedModel || !selectedStyle}
                 className="gap-2"
               >
                 <Play className="h-4 w-4" />

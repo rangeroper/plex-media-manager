@@ -105,6 +105,55 @@ async function processQueue(jobId: string): Promise<void> {
       console.log(`[Worker] Queue status: ${remainingItems} items remaining`)
 
       try {
+        console.log(`[Worker] Checking if model ${job.model} is downloaded...`)
+        const modelsResponse = await fetch(
+          `${process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000"}/api/sd/models`,
+        )
+        if (modelsResponse.ok) {
+          const modelsData = await modelsResponse.json()
+          const modelExists = modelsData.models.some((m: any) => m.id === job.model && m.downloaded)
+
+          if (!modelExists) {
+            console.log(`[Worker] Model ${job.model} not downloaded, downloading now...`)
+            const downloadResponse = await fetch(
+              `${process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000"}/api/sd/models/download`,
+              {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ modelId: job.model }),
+              },
+            )
+
+            if (!downloadResponse.ok) {
+              throw new Error(`Failed to download model ${job.model}`)
+            }
+
+            console.log(`[Worker] Model ${job.model} download initiated`)
+            // Wait for download to complete (poll status)
+            let downloaded = false
+            let attempts = 0
+            while (!downloaded && attempts < 60) {
+              // 5 minutes max
+              await sleep(5000)
+              const checkResponse = await fetch(
+                `${process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000"}/api/sd/models`,
+              )
+              if (checkResponse.ok) {
+                const checkData = await checkResponse.json()
+                downloaded = checkData.models.some((m: any) => m.id === job.model && m.downloaded)
+              }
+              attempts++
+            }
+
+            if (!downloaded) {
+              throw new Error(`Model ${job.model} download timed out`)
+            }
+            console.log(`[Worker] Model ${job.model} successfully downloaded`)
+          } else {
+            console.log(`[Worker] Model ${job.model} is already downloaded`)
+          }
+        }
+
         // Generate poster
         console.log(`[Worker] Generating poster with SD (model: ${job.model}, style: ${job.style})...`)
         const buffer = await generatePoster({

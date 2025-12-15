@@ -1,142 +1,150 @@
-// app/api/posters/generate/[jobId]/route.ts
+// app/api/posters/generate/route.ts
 import { type NextRequest, NextResponse } from "next/server"
-import { getJob, pauseJob, resumeJob } from "@/lib/posters/queue"
-import { startWorker, isWorkerActive } from "@/lib/posters/worker"
+import { cache } from "@/lib/redis-cache"
+import { createPosterJob } from "@/lib/posters/queue"
+import { startWorker } from "@/lib/posters/worker"
 
 export const dynamic = "force-dynamic"
 
-/**
- * GET - Fetch job status
- */
-export async function GET(request: NextRequest, { params }: { params: Promise<{ jobId: string }> }) {
-  const { jobId } = await params
-
-  if (!jobId) {
-    return NextResponse.json({ error: "Missing jobId" }, { status: 400 })
-  }
-
-  try {
-    const job = await getJob(jobId)
-
-    if (!job) {
-      return NextResponse.json({ error: `Job ${jobId} not found` }, { status: 404 })
-    }
-
-    const progress =
-      job.totalItems > 0 ? Math.round(((job.completedItems + job.failedItems) / job.totalItems) * 100) : 0
-
-    return NextResponse.json({
-      jobId: job.jobId,
-      libraryKey: job.libraryKey,
-      status: job.status,
-      model: job.model,
-      style: job.style,
-      totalItems: job.totalItems,
-      completedItems: job.completedItems,
-      failedItems: job.failedItems,
-      currentItem: job.currentItem,
-      currentItemIndex: job.currentItemIndex,
-      currentItemRatingKey: job.currentItemRatingKey,
-      remainingItems: job.remainingItems,
-      progress,
-      createdAt: job.createdAt,
-      startedAt: job.startedAt,
-      completedAt: job.completedAt,
-      pausedAt: job.pausedAt,
-      errors: job.errors,
-      isWorkerActive: isWorkerActive(),
-    })
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error)
-    console.error(`[API] Failed to fetch job ${jobId}:`, message)
-    return NextResponse.json({ error: "Failed to fetch job", message }, { status: 500 })
-  }
+interface PlexItem {
+  ratingKey: string
+  title?: string
+  year?: number
+  type?: string
+  [key: string]: any
 }
 
-/**
- * POST - Control job (pause/resume)
- */
-export async function POST(request: NextRequest, { params }: { params: Promise<{ jobId: string }> }) {
-  const { jobId } = await params
+interface RedisLibraryData {
+  items: PlexItem[]
+  connectedUrl: string
+  totalSize: number
+}
 
-  if (!jobId) {
-    return NextResponse.json({ error: "Missing jobId" }, { status: 400 })
-  }
+export async function POST(request: NextRequest) {
+  console.log("[API] /api/posters/generate - POST request received")
 
   try {
     const body = await request.json()
-    const { action } = body
+    console.log("[API] Request body:", body)
 
-    if (!action || !["pause", "resume"].includes(action)) {
-      return NextResponse.json({ error: "Invalid action. Must be 'pause' or 'resume'" }, { status: 400 })
+    const { libraryKey, provider, model, style, serverId = "default" } = body
+
+    if (!libraryKey || !provider || !model || !style) {
+      console.error("[API] Missing required parameters:", { libraryKey, provider, model, style })
+      return NextResponse.json(
+        {
+          error: "Missing required parameters",
+          details: "libraryKey, provider, model, and style are all required",
+        },
+        { status: 400 },
+      )
     }
 
-    const job = await getJob(jobId)
-    if (!job) {
-      return NextResponse.json({ error: `Job ${jobId} not found` }, { status: 404 })
+    console.log(`[API] Generation request: model=${model}, style=${style}`)
+
+    // 1. Fetch items from Redis
+    const redisKey = `items:${serverId}:${libraryKey}:0:100`
+    console.log(`[API] Looking for Redis key: ${redisKey}`)
+
+    let rawData = await cache.get(redisKey)
+
+    // Fallback keys
+    if (!rawData) {
+      const fallbackKey = `items:${serverId}:${libraryKey}`
+      console.log(`[API] Trying fallback key: ${fallbackKey}`)
+      rawData = await cache.get(fallbackKey)
     }
 
-    if (action === "pause") {
-      if (job.status === "paused") {
-        return NextResponse.json({
-          message: "Job is already paused",
-          status: job.status,
-        })
-      }
-
-      if (job.status === "completed" || job.status === "failed") {
-        return NextResponse.json(
-          {
-            error: `Cannot pause a ${job.status} job`,
-            status: job.status,
-          },
-          { status: 400 },
-        )
-      }
-
-      console.log(`[API] Pausing job ${jobId}`)
-      await pauseJob(jobId)
-
-      return NextResponse.json({
-        message: "Job paused (will finish current item)",
-        status: "paused",
-      })
-    } else if (action === "resume") {
-      if (job.status !== "paused") {
-        return NextResponse.json(
-          {
-            error: `Cannot resume a ${job.status} job. Only paused jobs can be resumed.`,
-            status: job.status,
-          },
-          { status: 400 },
-        )
-      }
-
-      console.log(`[API] Resuming job ${jobId}`)
-      await resumeJob(jobId)
-
-      // Check if worker is already running
-      if (isWorkerActive()) {
-        console.log(`[API] Worker already active, job will resume automatically`)
-        return NextResponse.json({
-          message: "Job resumed (worker already running)",
-          status: "running",
-        })
-      }
-
-      // Start worker
-      startWorker(jobId).catch((err) => console.error(`[Worker] Failed to resume job ${jobId}:`, err))
-
-      return NextResponse.json({
-        message: "Job resumed and worker started",
-        status: "running",
-      })
+    if (!rawData) {
+      const simpleKey = `items:${libraryKey}`
+      console.log(`[API] Trying simple key: ${simpleKey}`)
+      rawData = await cache.get(simpleKey)
     }
 
-    return NextResponse.json({ error: "Unknown action" }, { status: 400 })
+    if (!rawData) {
+      console.error(`[API] No items found in Redis for library ${libraryKey}`)
+      return NextResponse.json(
+        { error: `No items found in Redis for library ${libraryKey}. Please load the library first.` },
+        { status: 404 },
+      )
+    }
+
+    // Parse the data
+    let libraryData: RedisLibraryData
+
+    if (typeof rawData === "string") {
+      console.log("[API] Parsing data from JSON string")
+      libraryData = JSON.parse(rawData)
+    } else {
+      console.log("[API] Data already parsed as object")
+      libraryData = rawData as RedisLibraryData
+    }
+
+    // Extract items array
+    const items = libraryData.items
+
+    if (!Array.isArray(items)) {
+      console.error("[API] Items is not an array:", typeof items)
+      return NextResponse.json({ error: "Invalid data format: items is not an array" }, { status: 500 })
+    }
+
+    console.log(`[API] Found ${items.length} items in library (totalSize: ${libraryData.totalSize})`)
+
+    if (!items.length) {
+      return NextResponse.json({ error: `Library ${libraryKey} is empty` }, { status: 404 })
+    }
+
+    // Validate items have required fields
+    const validItems = items.filter((item) => item && item.ratingKey)
+
+    if (validItems.length === 0) {
+      console.error("[API] No valid items with ratingKey found")
+      return NextResponse.json({ error: "No valid items found in library data" }, { status: 500 })
+    }
+
+    if (validItems.length < items.length) {
+      console.warn(`[API] ${items.length - validItems.length} items missing ratingKey`)
+    }
+
+    console.log(`[API] Creating job for ${validItems.length} valid items with model=${model}, style=${style}`)
+
+    // 2. Create job and enqueue all items
+    const job = await createPosterJob(
+      libraryKey,
+      validItems.map((item) => ({
+        ratingKey: item.ratingKey,
+        title: item.title,
+        year: item.year?.toString(),
+        type: item.type,
+      })),
+      model,
+      style,
+    )
+
+    console.log(`[API] Created job ${job.jobId} with ${validItems.length} items`)
+
+    // 3. Start worker (fire-and-forget)
+    startWorker(job.jobId).catch((err) => console.error(`[Worker] Failed to start worker for job ${job.jobId}:`, err))
+
+    // 4. Return job info
+    return NextResponse.json({
+      jobId: job.jobId,
+      total: validItems.length,
+      model,
+      style,
+      message: `Started generation for ${validItems.length} items`,
+    })
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
-    console.error(`[API] Failed to control job ${jobId}:`, message)
-    return NextResponse.json({ error: "Failed to control job", message }, { status: 500 })
+    console.error("[API] Poster generation failed:", message, error)
+    return NextResponse.json({ error: "Poster generation failed", message }, { status: 500 })
   }
+}
+
+export async function GET() {
+  return NextResponse.json({
+    status: "ok",
+    message: "Poster generation endpoint is available",
+    methods: ["POST"],
+  })
 }

@@ -20,6 +20,12 @@ interface ModelsResponse {
   models: SDModel[]
 }
 
+interface DownloadState {
+  modelKey: string
+  status: "downloading" | "complete" | "error"
+  message?: string
+}
+
 const MODEL_NAMES: Record<string, string> = {
   "sd-3.5-large": "Stable Diffusion 3.5 Large",
   "sd-3.5-medium": "Stable Diffusion 3.5 Medium",
@@ -34,13 +40,51 @@ const MODEL_DESCRIPTIONS: Record<string, string> = {
   "sd-1.5": "Classic model, fastest generation. Good for quick iterations.",
 }
 
+const DOWNLOAD_STATE_KEY = "sd-models-download-state"
+
 export function ModelsView() {
   const [models, setModels] = useState<SDModel[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [downloadingModel, setDownloadingModel] = useState<string | null>(null)
+  const [downloadStates, setDownloadStates] = useState<Record<string, DownloadState>>({})
   const [deletingModel, setDeletingModel] = useState<string | null>(null)
   const [unloading, setUnloading] = useState(false)
+
+  useEffect(() => {
+    const stored = localStorage.getItem(DOWNLOAD_STATE_KEY)
+    if (stored) {
+      try {
+        setDownloadStates(JSON.parse(stored))
+      } catch (e) {
+        console.error("Failed to parse download states:", e)
+      }
+    }
+  }, [])
+
+  useEffect(() => {
+    if (Object.keys(downloadStates).length > 0) {
+      localStorage.setItem(DOWNLOAD_STATE_KEY, JSON.stringify(downloadStates))
+
+      // Auto-cleanup completed/error states after delay
+      const timer = setTimeout(() => {
+        setDownloadStates((prev) => {
+          const updated = { ...prev }
+          let hasChanges = false
+
+          for (const key in updated) {
+            if (updated[key].status === "complete" || updated[key].status === "error") {
+              delete updated[key]
+              hasChanges = true
+            }
+          }
+
+          return hasChanges ? updated : prev
+        })
+      }, 5000)
+
+      return () => clearTimeout(timer)
+    }
+  }, [downloadStates])
 
   const fetchModels = async () => {
     try {
@@ -53,6 +97,16 @@ export function ModelsView() {
 
       const data: ModelsResponse = await response.json()
       setModels(data.models)
+
+      setDownloadStates((prev) => {
+        const updated = { ...prev }
+        for (const model of data.models) {
+          if (model.downloaded && updated[model.key]?.status === "downloading") {
+            delete updated[model.key]
+          }
+        }
+        return updated
+      })
     } catch (err) {
       console.error("Error fetching models:", err)
       setError(err instanceof Error ? err.message : "Failed to fetch models")
@@ -63,7 +117,10 @@ export function ModelsView() {
 
   const downloadModel = async (modelKey: string) => {
     try {
-      setDownloadingModel(modelKey)
+      setDownloadStates((prev) => ({
+        ...prev,
+        [modelKey]: { modelKey, status: "downloading" },
+      }))
       setError(null)
 
       const response = await fetch("/api/sd/models/download", {
@@ -77,12 +134,29 @@ export function ModelsView() {
         throw new Error(data.error || "Failed to download model")
       }
 
+      setDownloadStates((prev) => ({
+        ...prev,
+        [modelKey]: { modelKey, status: "complete" },
+      }))
+
       await fetchModels()
+
+      setTimeout(() => {
+        setDownloadStates((prev) => {
+          const updated = { ...prev }
+          delete updated[modelKey]
+          return updated
+        })
+      }, 3000)
     } catch (err) {
       console.error("Error downloading model:", err)
-      setError(err instanceof Error ? err.message : "Failed to download model")
-    } finally {
-      setDownloadingModel(null)
+      const errorMsg = err instanceof Error ? err.message : "Failed to download model"
+      setError(errorMsg)
+
+      setDownloadStates((prev) => ({
+        ...prev,
+        [modelKey]: { modelKey, status: "error", message: errorMsg },
+      }))
     }
   }
 
@@ -196,66 +270,79 @@ export function ModelsView() {
       )}
 
       <div className="grid gap-4">
-        {models.map((model) => (
-          <Card key={model.key} className="p-6">
-            <div className="flex items-start justify-between">
-              <div className="flex-1">
-                <div className="flex items-center gap-3 mb-2">
-                  <h3 className="text-xl font-semibold">{MODEL_NAMES[model.key] || model.key}</h3>
-                  <div className="flex items-center gap-2">
-                    {model.downloaded ? (
-                      <Badge variant="default" className="gap-1">
-                        <CheckCircle2 className="h-3 w-3" />
-                        Downloaded
-                      </Badge>
-                    ) : (
-                      <Badge variant="outline" className="gap-1">
-                        <XCircle className="h-3 w-3" />
-                        Not Downloaded
-                      </Badge>
-                    )}
-                    {model.loaded_in_memory && (
-                      <Badge variant="secondary" className="gap-1">
-                        <HardDrive className="h-3 w-3" />
-                        In GPU Memory
-                      </Badge>
-                    )}
-                    {model.requires_auth && (
-                      <Badge variant="outline" className="gap-1">
-                        <Lock className="h-3 w-3" />
-                        Gated Model
-                      </Badge>
-                    )}
+        {models.map((model) => {
+          const downloadState = downloadStates[model.key]
+          const isDownloading = downloadState?.status === "downloading"
+
+          return (
+            <Card key={model.key} className="p-6">
+              <div className="flex items-start justify-between">
+                <div className="flex-1">
+                  <div className="flex items-center gap-3 mb-2">
+                    <h3 className="text-xl font-semibold">{MODEL_NAMES[model.key] || model.key}</h3>
+                    <div className="flex items-center gap-2">
+                      {isDownloading ? (
+                        <Badge variant="secondary" className="gap-1">
+                          <RefreshCw className="h-3 w-3 animate-spin" />
+                          Downloading...
+                        </Badge>
+                      ) : model.downloaded ? (
+                        <Badge variant="default" className="gap-1">
+                          <CheckCircle2 className="h-3 w-3" />
+                          Downloaded
+                        </Badge>
+                      ) : (
+                        <Badge variant="outline" className="gap-1">
+                          <XCircle className="h-3 w-3" />
+                          Not Downloaded
+                        </Badge>
+                      )}
+                      {model.loaded_in_memory && (
+                        <Badge variant="secondary" className="gap-1">
+                          <HardDrive className="h-3 w-3" />
+                          In GPU Memory
+                        </Badge>
+                      )}
+                      {model.requires_auth && (
+                        <Badge variant="outline" className="gap-1">
+                          <Lock className="h-3 w-3" />
+                          Gated Model
+                        </Badge>
+                      )}
+                    </div>
                   </div>
+                  <p className="text-sm text-muted-foreground mb-2">{MODEL_DESCRIPTIONS[model.key] || ""}</p>
+                  <p className="text-xs text-muted-foreground">Model ID: {model.id}</p>
+                  {model.requires_auth && !model.downloaded && (
+                    <p className="text-xs text-amber-600 dark:text-amber-500 mt-2">
+                      Requires HUGGINGFACE_TOKEN environment variable to download
+                    </p>
+                  )}
+                  {downloadState?.status === "error" && (
+                    <p className="text-xs text-red-600 dark:text-red-500 mt-2">Error: {downloadState.message}</p>
+                  )}
                 </div>
-                <p className="text-sm text-muted-foreground mb-2">{MODEL_DESCRIPTIONS[model.key] || ""}</p>
-                <p className="text-xs text-muted-foreground">Model ID: {model.id}</p>
-                {model.requires_auth && !model.downloaded && (
-                  <p className="text-xs text-amber-600 dark:text-amber-500 mt-2">
-                    Requires HUGGINGFACE_TOKEN environment variable to download
-                  </p>
-                )}
+                <div className="flex items-center gap-2 ml-4">
+                  {!model.downloaded ? (
+                    <Button onClick={() => downloadModel(model.key)} disabled={isDownloading}>
+                      <Download className="h-4 w-4 mr-2" />
+                      {isDownloading ? "Downloading..." : "Download"}
+                    </Button>
+                  ) : (
+                    <Button
+                      onClick={() => deleteModel(model.key)}
+                      disabled={deletingModel === model.key || model.loaded_in_memory}
+                      variant="destructive"
+                    >
+                      <Trash2 className="h-4 w-4 mr-2" />
+                      {deletingModel === model.key ? "Deleting..." : "Delete"}
+                    </Button>
+                  )}
+                </div>
               </div>
-              <div className="flex items-center gap-2 ml-4">
-                {!model.downloaded ? (
-                  <Button onClick={() => downloadModel(model.key)} disabled={downloadingModel === model.key}>
-                    <Download className="h-4 w-4 mr-2" />
-                    {downloadingModel === model.key ? "Downloading..." : "Download"}
-                  </Button>
-                ) : (
-                  <Button
-                    onClick={() => deleteModel(model.key)}
-                    disabled={deletingModel === model.key || model.loaded_in_memory}
-                    variant="destructive"
-                  >
-                    <Trash2 className="h-4 w-4 mr-2" />
-                    {deletingModel === model.key ? "Deleting..." : "Delete"}
-                  </Button>
-                )}
-              </div>
-            </div>
-          </Card>
-        ))}
+            </Card>
+          )
+        })}
       </div>
 
       <div className="mt-8 p-4 bg-muted rounded-lg">
