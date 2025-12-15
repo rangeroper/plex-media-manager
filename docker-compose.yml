@@ -1,63 +1,85 @@
-services:
-  redis:
-    image: redis:7-alpine
-    container_name: plex-poster-redis
-    ports:
-      - "6382:6379"
-    volumes:
-      - /mnt/user/appdata/plex-media-manager/redis:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 5
-    networks:
-      - plex-media-manager
+name: Build and Push to Docker Hub
 
-  sd-api:
-    image: brmochel92/sd-api:latest
-    container_name: plex-poster-sd-api
-    runtime: nvidia
-    environment:
-      - NVIDIA_VISIBLE_DEVICES=all
-      - DEBIAN_FRONTEND=noninteractive
-      - HUGGINGFACE_TOKEN=${HUGGINGFACE_TOKEN}
-      - MODEL_DIR=/app/models/sdxl-turbo
-      - OUTPUT_DIR=/app/data/sd-output
-    ports:
-      - "9091:9090"
-    volumes:
-      - /mnt/user/appdata/plex-media-manager/sd-models:/app/models
-      - /mnt/user/appdata/plex-media-manager/data:/app/data
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9090/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 120s
-    networks:
-      - plex-media-manager
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
 
-  app:
-    image: brmochel92/plex-poster-app:latest
-    container_name: plex-poster-app
-    ports:
-      - "3000:3000"
-    environment:
-      - REDIS_URL=redis://redis:6379
-      - SD_API_URL=http://sd-api:9090
-    volumes:
-      - /mnt/user/appdata/plex-media-manager/data:/app/data
-      - /mnt/user/appdata/plex-media-manager/uploads:/app/uploads
-    depends_on:
-      redis:
-        condition: service_healthy
-      sd-api:
-        condition: service_healthy
-    networks:
-      - plex-media-manager
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
-networks:
-  plex-media-manager:
-    driver: bridge
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - service: plex-poster-app
+            context: ./plex-poster-app
+            image: brmochel92/plex-poster-app
+            needs_space: false
+          - service: sd-api
+            context: ./sd
+            image: brmochel92/sd-api
+            needs_space: true
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Free up disk space
+        if: matrix.needs_space
+        run: |
+          echo "Freeing disk space for ${{ matrix.service }}..."
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --all --force
+          df -h
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          buildkitd-flags: --allow-insecure-entitlement network.host
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Build and push ${{ matrix.service }}
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ matrix.context }}
+          push: true
+          tags: ${{ matrix.image }}:latest
+          cache-from: type=registry,ref=${{ matrix.image }}:buildcache
+          cache-to: type=registry,ref=${{ matrix.image }}:buildcache,mode=max
+          build-args: |
+            BUILDKIT_INLINE_CACHE=1
+
+      - name: Build summary for ${{ matrix.service }}
+        run: |
+          echo "✅ Successfully built ${{ matrix.service }}"
+          echo "📦 Image: ${{ matrix.image }}:latest"
+
+  summary:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    steps:
+      - name: Build summary
+        run: |
+          echo "🎉 All images built and pushed successfully!"
+          echo ""
+          echo "📦 Images available at:"
+          echo "   - brmochel92/plex-poster-app:latest"
+          echo "   - brmochel92/sd-api:latest"
+          echo ""
+          echo "🚀 To pull and restart on your server:"
+          echo "   docker-compose pull && docker-compose up -d"
