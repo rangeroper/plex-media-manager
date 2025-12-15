@@ -15,9 +15,7 @@ services:
       - plex-media-manager
 
   sd-api:
-    build:
-      context: ./sd
-      dockerfile: Dockerfile
+    image: brmochel92/sd-api:latest  # Pull from Docker Hub
     container_name: plex-poster-sd-api
     runtime: nvidia
     environment:
@@ -42,7 +40,7 @@ services:
       - plex-media-manager
 
   app:
-    build: ./plex-poster-app
+    image: brmochel92/plex-poster-app:latest  # Pull from Docker Hub
     container_name: plex-poster-app
     ports:
       - "3000:3000"
@@ -53,8 +51,10 @@ services:
       - ./data:/app/data
       - ./uploads:/app/uploads
     depends_on:
-      - redis
-      - sd-api
+      redis:
+        condition: service_healthy
+      sd-api:
+        condition: service_healthy
     networks:
       - plex-media-manager
 
