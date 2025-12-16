@@ -195,7 +195,11 @@ async function processQueue(jobId: string): Promise<void> {
         }
 
         // Save poster to disk
-        const posterPath = await PosterStorage.saveGeneratedPoster(item.libraryKey, item.ratingKey, buffer)
+        const posterPath = await PosterStorage.saveGeneratedPoster(item.libraryKey, item.ratingKey, buffer, {
+          model: job.model,
+          style: job.style,
+          prompt: `Movie poster for ${item.title}`,
+        })
         console.log(`[Worker] Saved poster to disk: ${posterPath}`)
 
         try {

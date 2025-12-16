@@ -274,25 +274,52 @@ export class PosterStorage {
 
   /**
    * Saves the raw image buffer to the preferred location:
-   * {configDir}/posters/{libraryKey}/{ratingKey}_{random_id}.png
+   * {configDir}/posters/{libraryKey}/{ratingKey}_{timestamp}.png
+   * Also saves metadata in a companion .json file
    * @param libraryKey The Plex library key (e.g., '1')
    * @param ratingKey The Plex item key (e.g., '12345')
    * @param imageBuffer The raw PNG/JPG image data
+   * @param metadata Optional metadata (model, style, etc.)
    * @returns The full path to the saved file
    */
-  static async saveGeneratedPoster(libraryKey: string, ratingKey: string, imageBuffer: Buffer): Promise<string> {
+  static async saveGeneratedPoster(
+    libraryKey: string,
+    ratingKey: string,
+    imageBuffer: Buffer,
+    metadata?: { model?: string; style?: string; prompt?: string },
+  ): Promise<string> {
     await this.ensureConfigDir() // Ensure the base directory is ready
     const targetDir = this.getPosterStoragePath(libraryKey)
     await fs.mkdir(targetDir, { recursive: true })
 
-    // Create a unique filename: {ratingKey}_{uuid}.png
-    const uniqueId = Math.random().toString(36).substring(2, 8)
-    const filename = `${ratingKey}_${uniqueId}.png`
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, -5) // Remove milliseconds
+    const filename = `${ratingKey}_${timestamp}.png`
     const fullPath = path.join(targetDir, filename)
+    const metadataPath = path.join(targetDir, `${ratingKey}_${timestamp}.json`)
 
     try {
+      // Save the image
       await fs.writeFile(fullPath, imageBuffer)
       console.log(`[PosterStorage] Successfully saved poster for ${ratingKey} to: ${fullPath}`)
+
+      if (metadata) {
+        await fs.writeFile(
+          metadataPath,
+          JSON.stringify(
+            {
+              ...metadata,
+              ratingKey,
+              libraryKey,
+              createdAt: new Date().toISOString(),
+              filename,
+            },
+            null,
+            2,
+          ),
+        )
+        console.log(`[PosterStorage] Successfully saved metadata to: ${metadataPath}`)
+      }
+
       return fullPath
     } catch (error) {
       console.error(`[PosterStorage] Failed to save poster for ${ratingKey} to ${fullPath}:`, error)
@@ -306,7 +333,9 @@ export class PosterStorage {
   static async getGeneratedPostersForItem(
     libraryKey: string,
     ratingKey: string,
-  ): Promise<Array<{ path: string; filename: string; created: Date; model?: string; style?: string }>> {
+  ): Promise<
+    Array<{ path: string; filename: string; created: Date; model?: string; style?: string; prompt?: string }>
+  > {
     try {
       await this.ensureConfigDir()
       const targetDir = this.getPosterStoragePath(libraryKey)
@@ -327,30 +356,31 @@ export class PosterStorage {
           const fullPath = path.join(targetDir, file.name)
           const stats = await fs.stat(fullPath)
 
-          // TODO: Store model/style metadata in a separate JSON file or database
-          // For now, return basic info
+          const metadataPath = fullPath.replace(".png", ".json")
+          let metadata: any = {}
+          try {
+            const metadataContent = await fs.readFile(metadataPath, "utf-8")
+            metadata = JSON.parse(metadataContent)
+          } catch {
+            // No metadata file, that's okay
+          }
+
           return {
             path: fullPath,
             filename: file.name,
             created: stats.birthtime,
-            model: undefined,
-            style: undefined,
+            model: metadata.model,
+            style: metadata.style,
+            prompt: metadata.prompt,
           }
         })
 
-      return Promise.all(posterFiles)
+      const results = await Promise.all(posterFiles)
+      // Sort by creation date, newest first
+      return results.sort((a, b) => b.created.getTime() - a.created.getTime())
     } catch (error) {
       console.error(`[PosterStorage] Failed to list generated posters for ${ratingKey}:`, error)
       return []
     }
-  }
-  // --- END NEW METHODS ---
-
-  static getConfig(): PosterConfig | null {
-    return this.config
-  }
-
-  static getStorageLocation(): string | null {
-    return CONFIG_DIR
   }
 }

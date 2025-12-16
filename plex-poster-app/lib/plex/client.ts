@@ -292,14 +292,26 @@ export class PlexClient {
       const data = await response.json()
       const posters = data.MediaContainer?.Metadata || []
 
-      return posters.map((poster: any) => ({
-        type: poster.provider === "local" ? "plex" : ("fanart" as const),
-        url: `${serverUrl}${poster.key}?X-Plex-Token=${this.authToken}`,
-        thumb: poster.thumb ? `${serverUrl}${poster.thumb}?X-Plex-Token=${this.authToken}` : undefined,
-        selected: poster.selected === 1,
-        provider: poster.provider,
-        ratingKey: poster.ratingKey,
-      }))
+      return posters.map((poster: any) => {
+        const posterUrl = poster.key.startsWith("http")
+          ? poster.key
+          : `${serverUrl}${poster.key}${poster.key.includes("?") ? "&" : "?"}X-Plex-Token=${this.authToken}`
+
+        const thumbUrl = poster.thumb
+          ? poster.thumb.startsWith("http")
+            ? poster.thumb
+            : `${serverUrl}${poster.thumb}${poster.thumb.includes("?") ? "&" : "?"}X-Plex-Token=${this.authToken}`
+          : undefined
+
+        return {
+          type: poster.provider === "local" ? "plex" : ("fanart" as const),
+          url: posterUrl,
+          thumb: thumbUrl,
+          selected: poster.selected === 1,
+          provider: poster.provider,
+          ratingKey: poster.ratingKey,
+        }
+      })
     } catch (error) {
       console.error(`[PlexClient] Error fetching posters for ${ratingKey}:`, error)
       return []
