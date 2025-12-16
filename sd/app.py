@@ -18,44 +18,33 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
-
 app = Flask(__name__)
 
 AVAILABLE_MODELS = {
-    "sd-3.5-large": {
-        "id": "stabilityai/stable-diffusion-3.5-large",
-        "class": "StableDiffusion3Pipeline",
-        "requires_auth": True,
-        "default_steps": 14,  # Reduced from 28 to 14 for memory savings
-        "default_guidance": 3.5,  # Reduced from 4.5
-        "needs_optimization": True,
-        "max_width": 768,  # Max resolution for memory safety
-        "max_height": 1024
+    'sd-3.5-large-gguf': {
+        'id': 'calcuis/sd3.5-large-gguf',
+        'class': 'StableDiffusion3Pipeline',
+        'needs_optimization': False  # GGUF models are pre-optimized
     },
-    "sd-3.5-medium": {
-        "id": "stabilityai/stable-diffusion-3.5-medium",
-        "class": "StableDiffusion3Pipeline",
-        "requires_auth": True,
-        "default_steps": 20,  # Reduced from 28
-        "default_guidance": 4.0,  # Reduced from 4.5
-        "needs_optimization": True,
-        "max_width": 896,
-        "max_height": 1152
+    'sd-3.5-large': {
+        'id': 'stabilityai/stable-diffusion-3.5-large',
+        'class': 'StableDiffusion3Pipeline',
+        'needs_optimization': False  # Removed optimization
     },
-    "sdxl-turbo": {
-        "id": "stabilityai/sdxl-turbo",
-        "class": "StableDiffusionXLPipeline",
-        "requires_auth": False,
-        "default_steps": 4,
-        "default_guidance": 1.0
+    'sd-3.5-medium': {
+        'id': 'stabilityai/stable-diffusion-3.5-medium',
+        'class': 'StableDiffusion3Pipeline',
+        'needs_optimization': False  # Removed optimization
     },
-    "sd-1.5": {
-        "id": "runwayml/stable-diffusion-v1-5",
-        "class": "DiffusionPipeline",
-        "requires_auth": False,
-        "default_steps": 50,
-        "default_guidance": 7.5
+    'sdxl-turbo': {
+        'id': 'stabilityai/sdxl-turbo',
+        'class': 'StableDiffusionXLPipeline',
+        'needs_optimization': False
+    },
+    'sd-1.5': {
+        'id': 'runwayml/stable-diffusion-v1-5',
+        'class': 'DiffusionPipeline',
+        'needs_optimization': False
     }
 }
 
@@ -126,90 +115,24 @@ def _load_model_into_memory(model_key: str):
     start_time = time.time()
     
     try:
-        # Determine if this is a large model requiring CPU offloading
-        is_large_model = model_key in ['sd-3.5-large', 'sd-3.5-medium']
+        # Load the model based on its class
+        if model_config['class'] == 'StableDiffusion3Pipeline':
+            current_pipeline = StableDiffusion3Pipeline.from_pretrained(
+                model_dir,
+                torch_dtype=torch.float16
+            )
+        elif model_config['class'] == 'StableDiffusionXLPipeline':
+            current_pipeline = StableDiffusionXLPipeline.from_pretrained(
+                model_dir,
+                torch_dtype=torch.float16
+            )
+        else:  # DiffusionPipeline
+            current_pipeline = DiffusionPipeline.from_pretrained(
+                model_dir,
+                torch_dtype=torch.float16
+            )
         
-        if is_large_model:
-            logger.info(f"🧠 Large model detected - enabling aggressive memory optimizations for 16GB VRAM")
-        
-        load_kwargs = {
-            "torch_dtype": torch.float16
-        }
-        
-        # Try fp16 variant first for compatible models
-        try:
-            if model_config['class'] == 'StableDiffusion3Pipeline':
-                current_pipeline = StableDiffusion3Pipeline.from_pretrained(
-                    model_dir,
-                    variant="fp16",
-                    **load_kwargs
-                )
-            elif model_config['class'] == 'StableDiffusionXLPipeline':
-                current_pipeline = StableDiffusionXLPipeline.from_pretrained(
-                    model_dir,
-                    variant="fp16",
-                    **load_kwargs
-                )
-            else:  # DiffusionPipeline
-                current_pipeline = DiffusionPipeline.from_pretrained(
-                    model_dir,
-                    **load_kwargs
-                )
-            logger.info("✓ Loaded fp16 variant")
-        except (OSError, ValueError) as e:
-            # fp16 variant not available, load full precision
-            logger.info(f"⚠️ fp16 variant not available, loading full precision model")
-            if model_config['class'] == 'StableDiffusion3Pipeline':
-                current_pipeline = StableDiffusion3Pipeline.from_pretrained(
-                    model_dir,
-                    **load_kwargs
-                )
-            elif model_config['class'] == 'StableDiffusionXLPipeline':
-                current_pipeline = StableDiffusionXLPipeline.from_pretrained(
-                    model_dir,
-                    **load_kwargs
-                )
-            else:  # DiffusionPipeline
-                current_pipeline = DiffusionPipeline.from_pretrained(
-                    model_dir,
-                    **load_kwargs
-                )
-        
-        if model_config.get('needs_optimization', False):
-            logger.info(f"⚙️ Applying memory optimizations for {model_key}...")
-            
-            # For SD3 models, use model_cpu_offload instead of sequential to avoid timestep bugs
-            if 'sd-3' in model_key.lower():
-                logger.info("⚙️ Using model CPU offload for SD3 (more stable)")
-                current_pipeline.enable_model_cpu_offload()
-            else:
-                logger.info("⚙️ Using sequential CPU offload for maximum memory savings")
-                current_pipeline.enable_sequential_cpu_offload()
-            
-            # Enable attention slicing to reduce memory usage
-            logger.info("  - Enabling attention slicing")
-            current_pipeline.enable_attention_slicing(slice_size="auto")
-            
-            if hasattr(current_pipeline, 'enable_vae_slicing'):
-                logger.info("  - Enabling VAE slicing")
-                current_pipeline.enable_vae_slicing()
-            else:
-                logger.info("  - VAE slicing not available for this pipeline (SD3)")
-            
-            # Enable memory efficient attention if available (xformers or PyTorch 2.0)
-            try:
-                current_pipeline.enable_xformers_memory_efficient_attention()
-                logger.info("  - Enabled xformers memory efficient attention")
-            except Exception:
-                # xformers not available, use PyTorch 2.0 scaled dot product attention
-                try:
-                    current_pipeline.unet.set_attn_processor(None)  # Use default PyTorch 2.0 SDPA
-                    logger.info("  - Using PyTorch 2.0 scaled dot product attention")
-                except Exception:
-                    logger.info("  - Memory efficient attention not available")
-        else:
-            # For smaller models, just move to GPU
-            current_pipeline = current_pipeline.to("cuda")
+        current_pipeline = current_pipeline.to("cuda")
         
         # Update globals
         MODEL_LOADED = True
@@ -229,10 +152,12 @@ def _load_model_into_memory(model_key: str):
         logger.info("=" * 80)
         
         return current_pipeline
-
+        
     except Exception as e:
-        logger.error(f"❌ Failed to load model '{model_key}': {e}")
-        raise RuntimeError(f"Model initialization failed for '{model_key}'") from e
+        logger.error(f"❌ Failed to load model '{model_key}': {str(e)}")
+        MODEL_LOADED = False
+        current_model_key = None
+        raise RuntimeError(f"Model initialization failed for '{model_key}'")
 
 
 def _unload_model_from_memory():
@@ -293,25 +218,31 @@ logger.info("=" * 80)
 
 @app.route('/generate', methods=['POST'])
 def generate():
-    """Generate an image from a text prompt with specified model and style"""
+    """Generate an image using Stable Diffusion"""
     request_id = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     
     try:
         data = request.json
+        prompt = data.get('prompt', '')
+        negative_prompt = data.get('negative_prompt', '')
+        model = data.get('model', 'sdxl-turbo')
+        style = data.get('style', 'cinematic')
         
-        model_key = data.get('model', 'sdxl-turbo')
-        style_key = data.get('style', 'cinematic')
-        prompt = data.get('prompt')
+        num_inference_steps = data.get('num_inference_steps', 28)
+        guidance_scale = data.get('guidance_scale', 7.0)
+        width = data.get('width', 1024)
+        height = data.get('height', 1536)
         
-        if not prompt:
-            logger.warning(f"[{request_id}] ❌ Request missing prompt")
-            return jsonify({'error': 'prompt is required'}), 400
         
-        # Validate model
-        if model_key not in AVAILABLE_MODELS:
-            return jsonify({'error': f'Invalid model: {model_key}'}), 400
+        logger.info("=" * 80)
+        logger.info(f"[{request_id}] 🎨 Starting poster generation")
+        logger.info(f"[{request_id}] 📝 Prompt: {prompt}")
+        logger.info(f"[{request_id}] 🎭 Style: {style}")
+        logger.info(f"[{request_id}] 🤖 Model: {model}")
+        logger.info(f"[{request_id}] 📐 Size: {width}x{height}")
+        logger.info(f"[{request_id}] 🔢 Steps: {num_inference_steps}, Guidance: {guidance_scale}")
         
-        style_modifier = STYLE_PRESETS.get(style_key, STYLE_PRESETS['cinematic'])
+        style_modifier = STYLE_PRESETS.get(style, STYLE_PRESETS['cinematic'])
         enhanced_prompt = f"{prompt}, {style_modifier}"
         
         if torch.cuda.is_available():
@@ -320,36 +251,10 @@ def generate():
             gc.collect()
         
         # Load the requested model
-        local_pipe = _load_model_into_memory(model_key)
-        
-        # Get model defaults
-        model_config = AVAILABLE_MODELS[model_key]
-        
-        width = data.get('width', 1024)
-        height = data.get('height', 1536)
-        
-        if 'max_width' in model_config and width > model_config['max_width']:
-            logger.warning(f"[{request_id}] ⚠️ Width {width} exceeds max {model_config['max_width']}, capping")
-            width = model_config['max_width']
-        
-        if 'max_height' in model_config and height > model_config['max_height']:
-            logger.warning(f"[{request_id}] ⚠️ Height {height} exceeds max {model_config['max_height']}, capping")
-            height = model_config['max_height']
-        
-        # Process request parameters
-        negative_prompt = data.get('negative_prompt', 'blurry, low quality, distorted, text, watermark')
-        steps = data.get('num_inference_steps', model_config['default_steps'])
-        guidance = data.get('guidance_scale', model_config['default_guidance'])
-        seed = data.get('seed')
-
-        logger.info("=" * 80)
-        logger.info(f"[{request_id}] 📥 NEW GENERATION REQUEST")
-        logger.info(f"[{request_id}] 🎨 Model: {model_key}")
-        logger.info(f"[{request_id}] 🎭 Style: {style_key}")
-        logger.info(f"[{request_id}] 📝 Enhanced Prompt: {enhanced_prompt}")
-        logger.info(f"[{request_id}] ⚙️ Parameters: {width}x{height}, {steps} steps, guidance {guidance}")
+        local_pipe = _load_model_into_memory(model)
         
         # Set seed if provided
+        seed = data.get('seed')
         generator = None
         if seed is not None:
             generator = torch.Generator(device="cuda").manual_seed(seed)
@@ -368,8 +273,8 @@ def generate():
             negative_prompt=negative_prompt,
             width=width,
             height=height,
-            num_inference_steps=steps,
-            guidance_scale=guidance,
+            num_inference_steps=num_inference_steps,
+            guidance_scale=guidance_scale,
             generator=generator
         ).images[0]
 
@@ -394,8 +299,8 @@ def generate():
             'filename': filename,
             'path': filepath,
             'generation_time': round(gen_time, 2),
-            'model_used': model_key,
-            'style_used': style_key,
+            'model_used': model,
+            'style_used': style,
             'relative_path': f'/data/sd-output/{filename}'
         })
     
@@ -463,7 +368,6 @@ def list_models():
             'id': config['id'],
             'downloaded': is_downloaded,
             'loaded_in_memory': is_loaded,
-            'requires_auth': config['requires_auth'],
             'pipeline_class': config['class']
         })
     
@@ -505,7 +409,7 @@ def download_model():
                 yield f"data: {json.dumps({'status': 'starting', 'progress': 0, 'message': f'Initializing download for {model_key}...'})}\n\n"
                 
                 # Get HuggingFace token if required
-                hf_token = os.environ.get("HUGGINGFACE_TOKEN") if model_config['requires_auth'] else None
+                hf_token = os.environ.get("HUGGINGFACE_TOKEN")
                 
                 yield f"data: {json.dumps({'status': 'downloading', 'progress': 10, 'message': 'Downloading model files from HuggingFace...'})}\n\n"
                 

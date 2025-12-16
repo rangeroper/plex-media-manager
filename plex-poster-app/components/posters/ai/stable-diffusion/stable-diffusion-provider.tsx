@@ -21,10 +21,11 @@ interface StableDiffusionProviderProps {
 }
 
 const AVAILABLE_MODELS = [
-  { value: "sd-3.5-large", label: "SD 3.5 Large (Best Quality)" },
-  { value: "sd-3.5-medium", label: "SD 3.5 Medium (Balanced)" },
-  { value: "sdxl-turbo", label: "SDXL Turbo (Fastest)" },
-  { value: "sd-1.5", label: "SD 1.5 (Classic)" },
+  { value: "sd-3.5-large-gguf", label: "SD 3.5 Large GGUF (Quantized, 8-10GB)" },
+  { value: "sd-3.5-large", label: "SD 3.5 Large (Best Quality, 16GB+)" },
+  { value: "sd-3.5-medium", label: "SD 3.5 Medium (Balanced, 10-12GB)" },
+  { value: "sdxl-turbo", label: "SDXL Turbo (Fastest, 6-8GB)" },
+  { value: "sd-1.5", label: "SD 1.5 (Classic, 4GB)" },
 ]
 
 const AVAILABLE_STYLES = [
