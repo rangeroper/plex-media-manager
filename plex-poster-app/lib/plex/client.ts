@@ -350,15 +350,10 @@ export class PlexClient {
    */
   async uploadPoster(serverUrl: string, ratingKey: string, imageBuffer: Buffer): Promise<boolean> {
     try {
-      console.log(`[PlexClient] Uploading poster for rating key: ${ratingKey}`)
+      console.log(`[PlexClient] Uploading poster for rating key: ${ratingKey}, buffer size: ${imageBuffer.length}`)
 
-      const arrayBuffer = new ArrayBuffer(imageBuffer.length)
-      const view = new Uint8Array(arrayBuffer)
-      for (let i = 0; i < imageBuffer.length; i++) {
-        view[i] = imageBuffer[i]
-      }
-
-      const blob = new Blob([arrayBuffer], { type: "image/png" })
+      const blob = new Blob([imageBuffer], { type: "image/png" })
+      console.log(`[PlexClient] Created blob with size: ${blob.size}`)
 
       const formData = new globalThis.FormData()
       formData.append("file", blob, `poster_${ratingKey}.png`)

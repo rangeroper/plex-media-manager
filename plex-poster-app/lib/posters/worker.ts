@@ -188,6 +188,12 @@ async function processQueue(jobId: string): Promise<void> {
           type: item.type,
         })
 
+        console.log(`[Worker] Generated poster, buffer size: ${buffer.length} bytes`)
+
+        if (!buffer || buffer.length === 0) {
+          throw new Error("Generated poster buffer is empty")
+        }
+
         const updatedJobAfterGen = await getJob(jobId)
         if (updatedJobAfterGen) {
           updatedJobAfterGen.currentItem = `Saving: ${item.title || item.ratingKey}`
@@ -218,6 +224,8 @@ async function processQueue(jobId: string): Promise<void> {
               updatedJobBeforeUpload.currentItem = `Uploading to Plex: ${item.title || item.ratingKey}`
               await saveJob(updatedJobBeforeUpload)
             }
+
+            console.log(`[Worker] Uploading poster - buffer size: ${buffer.length} bytes`)
 
             // Upload the poster
             await plexClient.uploadPoster(serverUrl, item.ratingKey, buffer)
