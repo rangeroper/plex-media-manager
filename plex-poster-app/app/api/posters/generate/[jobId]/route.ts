@@ -2,6 +2,8 @@ import { type NextRequest, NextResponse } from "next/server"
 import { deleteJob, getJob } from "@/lib/posters/queue"
 import { stopWorker, getCurrentJobId } from "@/lib/posters/worker"
 
+export const dynamic = "force-dynamic"
+
 export async function GET(request: NextRequest, { params }: { params: Promise<{ jobId: string }> }) {
   try {
     const { jobId } = await params
