@@ -116,18 +116,23 @@ def _load_model_into_memory(model_key: str):
                 model_dir,
                 torch_dtype=torch.float16
             )
+            # Enable model CPU offload for SD3 models (keeps only active components on GPU)
+            logger.info("🔄 Enabling model CPU offload for memory efficiency...")
+            current_pipeline.enable_model_cpu_offload()
+            
         elif model_config['class'] == 'StableDiffusionXLPipeline':
             current_pipeline = StableDiffusionXLPipeline.from_pretrained(
                 model_dir,
                 torch_dtype=torch.float16
             )
+            current_pipeline = current_pipeline.to("cuda")
+            
         else:  # DiffusionPipeline
             current_pipeline = DiffusionPipeline.from_pretrained(
                 model_dir,
                 torch_dtype=torch.float16
             )
-        
-        current_pipeline = current_pipeline.to("cuda")
+            current_pipeline = current_pipeline.to("cuda")
         
         # Update globals
         MODEL_LOADED = True
