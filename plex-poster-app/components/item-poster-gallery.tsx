@@ -60,12 +60,12 @@ export function ItemPosterGallery({
   const renderPosterSection = (title: string, type: PosterSource["type"], items: PosterSource[]) => {
     if (items.length === 0) return null
 
-    const icon = type === "ai-generated" ? Sparkles : type === "fanart" ? ImageIconLucide : ImageIcon
+    const IconComponent = type === "ai-generated" ? Sparkles : type === "fanart" ? ImageIconLucide : ImageIcon
 
     return (
       <div key={type} className="space-y-3">
         <div className="flex items-center gap-2">
-          {icon && <span className="h-4 w-4">{icon({ className: "h-4 w-4" })}</span>}
+          <IconComponent className="h-4 w-4" />
           <h3 className="text-sm font-semibold">{title}</h3>
           <Badge variant="secondary" className="text-xs">
             {items.length}
