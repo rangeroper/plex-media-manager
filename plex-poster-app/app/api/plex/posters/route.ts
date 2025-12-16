@@ -12,7 +12,14 @@ export async function POST(request: NextRequest) {
     const plexClient = new PlexClient(plexToken)
 
     if (action === "set-primary" && posterUrl) {
-      await plexClient.setPrimaryPoster(plexUrl, ratingKey, posterUrl)
+      let posterPath = posterUrl
+      if (posterUrl.includes("/library/metadata/")) {
+        // Extract path from URL: http://server/path?token -> /path
+        const urlObj = new URL(posterUrl)
+        posterPath = urlObj.pathname
+      }
+
+      await plexClient.setPrimaryPoster(plexUrl, ratingKey, posterPath)
       return NextResponse.json({ success: true })
     }
 

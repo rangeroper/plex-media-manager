@@ -32,7 +32,7 @@ export default function ItemDetailPage() {
     setError(null)
 
     try {
-      const [metadataRes, postersRes] = await Promise.all([
+      const [metadataRes, postersRes, generatedRes] = await Promise.all([
         fetch("/api/plex/metadata", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -43,6 +43,7 @@ export default function ItemDetailPage() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ plexUrl, plexToken, ratingKey, action: "list" }),
         }),
+        fetch(`/api/posters/generated?libraryKey=${searchParams.get("libraryKey") || ""}&ratingKey=${ratingKey}`),
       ])
 
       if (!metadataRes.ok) {
@@ -53,10 +54,28 @@ export default function ItemDetailPage() {
       const metadata = await metadataRes.json()
       setItem(metadata.metadata)
 
+      const allPosters: PosterSource[] = []
+
       if (postersRes.ok) {
         const posterData = await postersRes.json()
-        setPosters(posterData.posters || [])
+        allPosters.push(...(posterData.posters || []))
       }
+
+      if (generatedRes.ok) {
+        const generatedData = await generatedRes.json()
+        const aiPosters = (generatedData.posters || []).map((p: any) => ({
+          type: "ai-generated" as const,
+          url: p.url,
+          thumb: p.thumb,
+          selected: false,
+          model: p.model || "Unknown",
+          style: p.style,
+          created: p.created,
+        }))
+        allPosters.push(...aiPosters)
+      }
+
+      setPosters(allPosters)
     } catch (err: any) {
       setError(err.message || "Failed to load item details")
     } finally {
