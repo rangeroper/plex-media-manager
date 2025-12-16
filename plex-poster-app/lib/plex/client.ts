@@ -1,4 +1,4 @@
-import type { PlexServer, PlexLibrary, PlexItem, PlexCollection } from "./types"
+import type { PlexServer, PlexLibrary, PlexItem, PlexCollection, PosterSource } from "./types"
 import { PlexStorage } from "./storage"
 import { PlexAuth } from "./auth"
 
@@ -238,7 +238,6 @@ export class PlexClient {
         throw new Error("Item not found")
       }
 
-      // Return full metadata with all available fields
       return {
         key: item.key,
         title: item.title,
@@ -259,9 +258,77 @@ export class PlexClient {
         audienceRating: item.audienceRating,
         viewCount: item.viewCount,
         lastViewedAt: item.lastViewedAt,
+        Role: item.Role || [],
+        Genre: item.Genre || [],
+        Director: item.Director || [],
+        Writer: item.Writer || [],
+        Extras: item.Extras,
+        guid: item.guid,
+        guids: item.Guid || [],
       }
     } catch (error) {
       console.error(`[PlexClient] Error fetching metadata for ${ratingKey}:`, error)
+      throw error
+    }
+  }
+
+  async getItemPosters(serverUrl: string, ratingKey: string): Promise<PosterSource[]> {
+    try {
+      const url = `${serverUrl}/library/metadata/${ratingKey}/posters?X-Plex-Token=${this.authToken}`
+
+      const response = await fetch(url, {
+        headers: {
+          Accept: "application/json",
+          "X-Plex-Token": this.authToken,
+          "X-Plex-Client-Identifier": this.clientId,
+        },
+        signal: AbortSignal.timeout(30000),
+      })
+
+      if (!response.ok) {
+        throw new Error(`Failed to fetch posters: ${response.status}`)
+      }
+
+      const data = await response.json()
+      const posters = data.MediaContainer?.Metadata || []
+
+      return posters.map((poster: any) => ({
+        type: poster.provider === "local" ? "plex" : ("fanart" as const),
+        url: `${serverUrl}${poster.key}?X-Plex-Token=${this.authToken}`,
+        thumb: poster.thumb ? `${serverUrl}${poster.thumb}?X-Plex-Token=${this.authToken}` : undefined,
+        selected: poster.selected === 1,
+        provider: poster.provider,
+        ratingKey: poster.ratingKey,
+      }))
+    } catch (error) {
+      console.error(`[PlexClient] Error fetching posters for ${ratingKey}:`, error)
+      return []
+    }
+  }
+
+  async setPrimaryPoster(serverUrl: string, ratingKey: string, posterUrl: string): Promise<boolean> {
+    try {
+      const url = `${serverUrl}/library/metadata/${ratingKey}/posters?X-Plex-Token=${this.authToken}`
+
+      const response = await fetch(url, {
+        method: "PUT",
+        headers: {
+          "X-Plex-Token": this.authToken,
+          "X-Plex-Client-Identifier": this.clientId,
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body: `url=${encodeURIComponent(posterUrl)}`,
+        signal: AbortSignal.timeout(30000),
+      })
+
+      if (!response.ok) {
+        throw new Error(`Failed to set primary poster: ${response.status}`)
+      }
+
+      console.log(`[PlexClient] Successfully set primary poster for ${ratingKey}`)
+      return true
+    } catch (error) {
+      console.error(`[PlexClient] Error setting primary poster for ${ratingKey}:`, error)
       throw error
     }
   }

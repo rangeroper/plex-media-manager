@@ -1,37 +1,23 @@
-// app/item/[key]/page.tsx
 "use client"
 
 import { useEffect, useState } from "react"
 import { useParams, useSearchParams } from "next/navigation"
-import { Loader2, ImageIcon, Calendar, Film, ArrowLeft } from "lucide-react"
+import { Loader2, ImageIcon, Calendar, Film, ArrowLeft, Star, Users, Play, Clock, Building } from "lucide-react"
 import Link from "next/link"
-
-interface ItemDetails {
-  key: string
-  title: string
-  type: string
-  thumb?: string
-  art?: string
-  year?: number
-  ratingKey: string
-  summary?: string
-  rating?: number
-  duration?: number
-  studio?: string
-  contentRating?: string
-  originallyAvailableAt?: string
-  addedAt?: number
-  updatedAt?: number
-}
+import { ItemPosterGallery } from "@/components/item-poster-gallery"
+import { Badge } from "@/components/ui/badge"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import type { PlexItemDetailed, PosterSource } from "@/lib/plex/types"
 
 export default function ItemDetailPage() {
   const params = useParams()
   const searchParams = useSearchParams()
-  const ratingKey = params.key as string // Changed from ratingKey to key
+  const ratingKey = params.key as string
   const plexUrl = searchParams.get("plexUrl") || ""
   const plexToken = searchParams.get("plexToken") || ""
 
-  const [item, setItem] = useState<ItemDetails | null>(null)
+  const [item, setItem] = useState<PlexItemDetailed | null>(null)
+  const [posters, setPosters] = useState<PosterSource[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -45,33 +31,23 @@ export default function ItemDetailPage() {
     setLoading(true)
     setError(null)
 
-    console.log("[Item Detail] Loading metadata for:", { ratingKey, plexUrl: plexUrl.substring(0, 50) })
-
     try {
       const response = await fetch("/api/plex/metadata", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          plexUrl,
-          plexToken,
-          ratingKey,
-        }),
+        body: JSON.stringify({ plexUrl, plexToken, ratingKey }),
       })
-
-      console.log("[Item Detail] Response status:", response.status)
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({ error: "Unknown error" }))
-        console.error("[Item Detail] Error response:", errorData)
         throw new Error(errorData.error || "Failed to fetch item details")
       }
 
       const data = await response.json()
-      console.log("[Item Detail] Received metadata:", data.metadata?.title)
       setItem(data.metadata)
+      setPosters(data.metadata.posters || [])
     } catch (err: any) {
       setError(err.message || "Failed to load item details")
-      console.error("[Item Detail] Error:", err)
     } finally {
       setLoading(false)
     }
@@ -114,6 +90,12 @@ export default function ItemDetailPage() {
     )
   }
 
+  const trailers = item.Extras?.Metadata?.filter((e) => e.subtype === "trailer") || []
+  const mainCast = item.Role?.slice(0, 10) || []
+  const directors = item.Director?.map((d) => d.tag).join(", ") || "Unknown"
+  const writers = item.Writer?.map((w) => w.tag).join(", ") || "Unknown"
+  const genres = item.Genre?.map((g) => g.tag) || []
+
   return (
     <div className="container mx-auto px-4 py-8">
       <Link
@@ -124,8 +106,8 @@ export default function ItemDetailPage() {
         Back to library
       </Link>
 
-      <div className="grid md:grid-cols-[300px_1fr] gap-8">
-        {/* Poster */}
+      <div className="grid lg:grid-cols-[300px_1fr] gap-8">
+        {/* Poster Sidebar */}
         <div className="space-y-4">
           <div className="aspect-[2/3] overflow-hidden rounded-lg border bg-card">
             {item.thumb ? (
@@ -142,54 +124,70 @@ export default function ItemDetailPage() {
           </div>
 
           {/* Quick Info Card */}
-          <div className="rounded-lg border bg-card p-4 space-y-2">
-            <div className="text-xs text-muted-foreground space-y-1">
-              <div className="flex justify-between">
-                <span>Rating Key:</span>
-                <span className="font-mono font-medium text-foreground">{item.ratingKey}</span>
-              </div>
-              <div className="flex justify-between">
-                <span>Type:</span>
-                <span className="capitalize text-foreground">{item.type}</span>
-              </div>
-              {item.year && (
-                <div className="flex justify-between">
-                  <span>Year:</span>
-                  <span className="text-foreground">{item.year}</span>
+          <div className="rounded-lg border bg-card p-4 space-y-3">
+            <div className="flex items-center gap-2">
+              {item.rating && (
+                <div className="flex items-center gap-1">
+                  <Star className="h-4 w-4 fill-yellow-400 text-yellow-400" />
+                  <span className="font-bold">{item.rating.toFixed(1)}</span>
+                  <span className="text-xs text-muted-foreground">/10</span>
                 </div>
               )}
               {item.contentRating && (
-                <div className="flex justify-between">
-                  <span>Rated:</span>
-                  <span className="text-foreground">{item.contentRating}</span>
+                <Badge variant="outline" className="text-xs">
+                  {item.contentRating}
+                </Badge>
+              )}
+            </div>
+
+            <div className="text-xs text-muted-foreground space-y-2">
+              {item.duration && (
+                <div className="flex items-center gap-2">
+                  <Clock className="h-3 w-3" />
+                  <span>{formatDuration(item.duration)}</span>
+                </div>
+              )}
+              {item.studio && (
+                <div className="flex items-center gap-2">
+                  <Building className="h-3 w-3" />
+                  <span>{item.studio}</span>
+                </div>
+              )}
+              {item.viewCount !== undefined && (
+                <div className="flex items-center gap-2">
+                  <Play className="h-3 w-3" />
+                  <span>{item.viewCount} views</span>
                 </div>
               )}
             </div>
           </div>
         </div>
 
-        {/* Details */}
+        {/* Main Content */}
         <div className="space-y-6">
+          {/* Header */}
           <div>
-            <h1 className="text-3xl font-bold tracking-tight">{item.title}</h1>
+            <h1 className="text-3xl font-bold tracking-tight leading-tight">{item.title}</h1>
+            {item.tagline && <p className="text-lg text-muted-foreground italic mt-1">{item.tagline}</p>}
             {item.year && (
-              <p className="text-muted-foreground mt-1">
+              <p className="text-muted-foreground mt-2">
                 {item.year}
                 {item.duration && ` • ${formatDuration(item.duration)}`}
                 {item.studio && ` • ${item.studio}`}
               </p>
             )}
+            {genres.length > 0 && (
+              <div className="flex flex-wrap gap-2 mt-3">
+                {genres.map((genre) => (
+                  <Badge key={genre} variant="secondary">
+                    {genre}
+                  </Badge>
+                ))}
+              </div>
+            )}
           </div>
 
-          {item.rating && (
-            <div className="flex items-center gap-2">
-              <div className="flex items-center gap-1">
-                <span className="text-2xl font-bold">{item.rating.toFixed(1)}</span>
-                <span className="text-muted-foreground">/10</span>
-              </div>
-            </div>
-          )}
-
+          {/* Overview */}
           {item.summary && (
             <div className="space-y-2">
               <h2 className="text-lg font-semibold">Overview</h2>
@@ -197,58 +195,155 @@ export default function ItemDetailPage() {
             </div>
           )}
 
-          {/* Metadata Grid */}
-          <div className="grid sm:grid-cols-2 gap-4 pt-4 border-t">
-            {item.originallyAvailableAt && (
-              <div className="space-y-1">
-                <p className="text-xs text-muted-foreground flex items-center gap-2">
-                  <Calendar className="h-3 w-3" />
-                  Release Date
-                </p>
-                <p className="text-sm font-medium">
-                  {new Date(item.originallyAvailableAt).toLocaleDateString()}
-                </p>
-              </div>
-            )}
+          {/* Tabs for organized content */}
+          <Tabs defaultValue="details" className="w-full">
+            <TabsList className="grid w-full grid-cols-4">
+              <TabsTrigger value="details">Details</TabsTrigger>
+              <TabsTrigger value="cast">Cast</TabsTrigger>
+              <TabsTrigger value="posters">Posters</TabsTrigger>
+              <TabsTrigger value="trailers">Trailers</TabsTrigger>
+            </TabsList>
 
-            {item.addedAt && (
-              <div className="space-y-1">
-                <p className="text-xs text-muted-foreground">Added to Library</p>
-                <p className="text-sm font-medium">
-                  {new Date(item.addedAt * 1000).toLocaleDateString()}
-                </p>
-              </div>
-            )}
+            <TabsContent value="details" className="space-y-4 mt-6">
+              <div className="grid sm:grid-cols-2 gap-4">
+                {item.originallyAvailableAt && (
+                  <div className="space-y-1">
+                    <p className="text-xs text-muted-foreground flex items-center gap-2">
+                      <Calendar className="h-3 w-3" />
+                      Release Date
+                    </p>
+                    <p className="text-sm font-medium">{new Date(item.originallyAvailableAt).toLocaleDateString()}</p>
+                  </div>
+                )}
 
-            <div className="space-y-1">
-              <p className="text-xs text-muted-foreground flex items-center gap-2">
-                <Film className="h-3 w-3" />
-                Media Type
-              </p>
-              <p className="text-sm font-medium capitalize">{item.type}</p>
-            </div>
+                {directors && (
+                  <div className="space-y-1">
+                    <p className="text-xs text-muted-foreground">Director(s)</p>
+                    <p className="text-sm font-medium">{directors}</p>
+                  </div>
+                )}
 
-            {item.contentRating && (
-              <div className="space-y-1">
-                <p className="text-xs text-muted-foreground">Content Rating</p>
-                <p className="text-sm font-medium">{item.contentRating}</p>
-              </div>
-            )}
-          </div>
+                {writers && (
+                  <div className="space-y-1">
+                    <p className="text-xs text-muted-foreground">Writer(s)</p>
+                    <p className="text-sm font-medium">{writers}</p>
+                  </div>
+                )}
 
-          {/* Backdrop */}
-          {item.art && (
-            <div className="pt-4">
-              <h2 className="text-lg font-semibold mb-3">Backdrop</h2>
-              <div className="aspect-video overflow-hidden rounded-lg border">
-                <img
-                  src={`${plexUrl}${item.art}?X-Plex-Token=${plexToken}`}
-                  alt={`${item.title} backdrop`}
-                  className="h-full w-full object-cover"
-                />
+                <div className="space-y-1">
+                  <p className="text-xs text-muted-foreground flex items-center gap-2">
+                    <Film className="h-3 w-3" />
+                    Media Type
+                  </p>
+                  <p className="text-sm font-medium capitalize">{item.type}</p>
+                </div>
+
+                {item.addedAt && (
+                  <div className="space-y-1">
+                    <p className="text-xs text-muted-foreground">Added to Library</p>
+                    <p className="text-sm font-medium">{new Date(item.addedAt * 1000).toLocaleDateString()}</p>
+                  </div>
+                )}
+
+                {item.audienceRating && (
+                  <div className="space-y-1">
+                    <p className="text-xs text-muted-foreground">Audience Rating</p>
+                    <p className="text-sm font-medium">{item.audienceRating}/10</p>
+                  </div>
+                )}
               </div>
-            </div>
-          )}
+
+              {/* Backdrop */}
+              {item.art && (
+                <div className="pt-4">
+                  <h3 className="text-sm font-semibold mb-3">Backdrop</h3>
+                  <div className="aspect-video overflow-hidden rounded-lg border">
+                    <img
+                      src={`${plexUrl}${item.art}?X-Plex-Token=${plexToken}`}
+                      alt={`${item.title} backdrop`}
+                      className="h-full w-full object-cover"
+                    />
+                  </div>
+                </div>
+              )}
+            </TabsContent>
+
+            <TabsContent value="cast" className="mt-6">
+              {mainCast.length > 0 ? (
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
+                  {mainCast.map((actor, idx) => (
+                    <div key={idx} className="space-y-2">
+                      <div className="aspect-[2/3] overflow-hidden rounded-lg border bg-muted">
+                        {actor.thumb ? (
+                          <img
+                            src={`${plexUrl}${actor.thumb}?X-Plex-Token=${plexToken}`}
+                            alt={actor.tag}
+                            className="h-full w-full object-cover"
+                          />
+                        ) : (
+                          <div className="flex h-full w-full items-center justify-center">
+                            <Users className="h-12 w-12 text-muted-foreground/50" />
+                          </div>
+                        )}
+                      </div>
+                      <div>
+                        <p className="text-sm font-medium leading-tight">{actor.tag}</p>
+                        {actor.role && <p className="text-xs text-muted-foreground">{actor.role}</p>}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground">No cast information available</p>
+              )}
+            </TabsContent>
+
+            <TabsContent value="posters" className="mt-6">
+              <ItemPosterGallery
+                posters={posters}
+                plexUrl={plexUrl}
+                plexToken={plexToken}
+                ratingKey={ratingKey}
+                currentPoster={item.thumb}
+                onPosterChange={loadItemDetails}
+              />
+            </TabsContent>
+
+            <TabsContent value="trailers" className="mt-6">
+              {trailers.length > 0 ? (
+                <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {trailers.map((trailer) => (
+                    <div key={trailer.ratingKey} className="space-y-2">
+                      <div className="aspect-video overflow-hidden rounded-lg border bg-muted relative group cursor-pointer">
+                        {trailer.thumb ? (
+                          <>
+                            <img
+                              src={`${plexUrl}${trailer.thumb}?X-Plex-Token=${plexToken}`}
+                              alt={trailer.title}
+                              className="h-full w-full object-cover"
+                            />
+                            <div className="absolute inset-0 bg-black/50 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                              <Play className="h-12 w-12 text-white" />
+                            </div>
+                          </>
+                        ) : (
+                          <div className="flex h-full w-full items-center justify-center">
+                            <Play className="h-12 w-12 text-muted-foreground/50" />
+                          </div>
+                        )}
+                      </div>
+                      <p className="text-sm font-medium">{trailer.title}</p>
+                      {trailer.duration && (
+                        <p className="text-xs text-muted-foreground">{formatDuration(trailer.duration)}</p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground">No trailers available</p>
+              )}
+            </TabsContent>
+          </Tabs>
         </div>
       </div>
     </div>

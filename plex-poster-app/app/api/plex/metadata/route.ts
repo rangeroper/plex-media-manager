@@ -35,12 +35,20 @@ export async function POST(request: NextRequest) {
     console.log(`[Metadata API] Fetching metadata for rating key ${ratingKey}...`)
 
     const metadata = await plexClient.getItemMetadata(plexUrl, ratingKey)
+
+    const posters = await plexClient.getItemPosters(plexUrl, ratingKey)
+
+    const enrichedMetadata = {
+      ...metadata,
+      posters,
+    }
+
     console.log(`[Metadata API] Successfully fetched metadata for: ${metadata.title}`)
 
     // Cache the metadata
-    await cache.set(cacheKey, metadata, { ttl: CACHE_TTL.METADATA })
+    await cache.set(cacheKey, enrichedMetadata, { ttl: CACHE_TTL.METADATA })
 
-    return NextResponse.json({ metadata })
+    return NextResponse.json({ metadata: enrichedMetadata })
   } catch (error: any) {
     console.error("[Metadata API] Error:", error)
     return NextResponse.json({ error: error.message || "Failed to fetch metadata" }, { status: 500 })

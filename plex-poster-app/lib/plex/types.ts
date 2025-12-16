@@ -76,3 +76,71 @@ export interface PlexConfig {
   user?: PlexUser
   lastConnected?: number
 }
+
+export interface PlexRole {
+  tag: string
+  role?: string
+  thumb?: string
+}
+
+export interface PlexGenre {
+  tag: string
+}
+
+export interface PlexDirector {
+  tag: string
+}
+
+export interface PlexWriter {
+  tag: string
+}
+
+export interface PlexExtras {
+  size: number
+  Metadata?: PlexExtraItem[]
+}
+
+export interface PlexExtraItem {
+  ratingKey: string
+  key: string
+  title: string
+  type: string
+  subtype?: string
+  thumb?: string
+  duration?: number
+}
+
+export interface PlexItemDetailed extends PlexItem {
+  summary?: string
+  rating?: number
+  audienceRating?: number
+  duration?: number
+  studio?: string
+  contentRating?: string
+  originallyAvailableAt?: string
+  tagline?: string
+  viewCount?: number
+  lastViewedAt?: number
+  Role?: PlexRole[]
+  Genre?: PlexGenre[]
+  Director?: PlexDirector[]
+  Writer?: PlexWriter[]
+  Extras?: PlexExtras
+  guids?: PlexGuid[]
+}
+
+export interface PlexGuid {
+  id: string
+}
+
+export interface PosterSource {
+  type: "plex" | "fanart" | "ai-generated"
+  url: string
+  thumb?: string
+  selected: boolean
+  provider?: string
+  ratingKey?: string
+  model?: string
+  style?: string
+  generatedAt?: number
+}

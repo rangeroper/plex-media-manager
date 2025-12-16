@@ -1,10 +1,27 @@
 import { type NextRequest, NextResponse } from "next/server"
-import { deleteJob } from "@/lib/posters/queue"
+import { deleteJob, getJob } from "@/lib/posters/queue"
 import { stopWorker, getCurrentJobId } from "@/lib/posters/worker"
 
-export async function DELETE(request: NextRequest, { params }: { params: { jobId: string } }) {
+export async function GET(request: NextRequest, { params }: { params: Promise<{ jobId: string }> }) {
   try {
-    const { jobId } = params
+    const { jobId } = await params
+
+    const job = await getJob(jobId)
+
+    if (!job) {
+      return NextResponse.json({ error: "Job not found" }, { status: 404 })
+    }
+
+    return NextResponse.json(job)
+  } catch (error) {
+    console.error("[API] Failed to fetch job:", error)
+    return NextResponse.json({ error: "Failed to fetch job" }, { status: 500 })
+  }
+}
+
+export async function DELETE(request: NextRequest, { params }: { params: Promise<{ jobId: string }> }) {
+  try {
+    const { jobId } = await params
 
     console.log(`[API] Deleting job: ${jobId}`)
 
