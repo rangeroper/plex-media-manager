@@ -21,20 +21,15 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 
 AVAILABLE_MODELS = {
-    'sd-3.5-large-gguf': {
-        'id': 'calcuis/sd3.5-large-gguf',
-        'class': 'StableDiffusion3Pipeline',
-        'needs_optimization': False  # GGUF models are pre-optimized
-    },
     'sd-3.5-large': {
         'id': 'stabilityai/stable-diffusion-3.5-large',
         'class': 'StableDiffusion3Pipeline',
-        'needs_optimization': False  # Removed optimization
+        'needs_optimization': False
     },
     'sd-3.5-medium': {
         'id': 'stabilityai/stable-diffusion-3.5-medium',
         'class': 'StableDiffusion3Pipeline',
-        'needs_optimization': False  # Removed optimization
+        'needs_optimization': False
     },
     'sdxl-turbo': {
         'id': 'stabilityai/sdxl-turbo',
