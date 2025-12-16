@@ -32,20 +32,31 @@ export default function ItemDetailPage() {
     setError(null)
 
     try {
-      const response = await fetch("/api/plex/metadata", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ plexUrl, plexToken, ratingKey }),
-      })
+      const [metadataRes, postersRes] = await Promise.all([
+        fetch("/api/plex/metadata", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ plexUrl, plexToken, ratingKey }),
+        }),
+        fetch("/api/plex/posters", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ plexUrl, plexToken, ratingKey, action: "list" }),
+        }),
+      ])
 
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ error: "Unknown error" }))
+      if (!metadataRes.ok) {
+        const errorData = await metadataRes.json().catch(() => ({ error: "Unknown error" }))
         throw new Error(errorData.error || "Failed to fetch item details")
       }
 
-      const data = await response.json()
-      setItem(data.metadata)
-      setPosters(data.metadata.posters || [])
+      const metadata = await metadataRes.json()
+      setItem(metadata.metadata)
+
+      if (postersRes.ok) {
+        const posterData = await postersRes.json()
+        setPosters(posterData.posters || [])
+      }
     } catch (err: any) {
       setError(err.message || "Failed to load item details")
     } finally {
@@ -90,7 +101,6 @@ export default function ItemDetailPage() {
     )
   }
 
-  const trailers = item.Extras?.Metadata?.filter((e) => e.subtype === "trailer") || []
   const mainCast = item.Role?.slice(0, 10) || []
   const directors = item.Director?.map((d) => d.tag).join(", ") || "Unknown"
   const writers = item.Writer?.map((w) => w.tag).join(", ") || "Unknown"
@@ -197,11 +207,10 @@ export default function ItemDetailPage() {
 
           {/* Tabs for organized content */}
           <Tabs defaultValue="details" className="w-full">
-            <TabsList className="grid w-full grid-cols-4">
+            <TabsList className="grid w-full grid-cols-3">
               <TabsTrigger value="details">Details</TabsTrigger>
               <TabsTrigger value="cast">Cast</TabsTrigger>
               <TabsTrigger value="posters">Posters</TabsTrigger>
-              <TabsTrigger value="trailers">Trailers</TabsTrigger>
             </TabsList>
 
             <TabsContent value="details" className="space-y-4 mt-6">
@@ -307,41 +316,6 @@ export default function ItemDetailPage() {
                 currentPoster={item.thumb}
                 onPosterChange={loadItemDetails}
               />
-            </TabsContent>
-
-            <TabsContent value="trailers" className="mt-6">
-              {trailers.length > 0 ? (
-                <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {trailers.map((trailer) => (
-                    <div key={trailer.ratingKey} className="space-y-2">
-                      <div className="aspect-video overflow-hidden rounded-lg border bg-muted relative group cursor-pointer">
-                        {trailer.thumb ? (
-                          <>
-                            <img
-                              src={`${plexUrl}${trailer.thumb}?X-Plex-Token=${plexToken}`}
-                              alt={trailer.title}
-                              className="h-full w-full object-cover"
-                            />
-                            <div className="absolute inset-0 bg-black/50 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
-                              <Play className="h-12 w-12 text-white" />
-                            </div>
-                          </>
-                        ) : (
-                          <div className="flex h-full w-full items-center justify-center">
-                            <Play className="h-12 w-12 text-muted-foreground/50" />
-                          </div>
-                        )}
-                      </div>
-                      <p className="text-sm font-medium">{trailer.title}</p>
-                      {trailer.duration && (
-                        <p className="text-xs text-muted-foreground">{formatDuration(trailer.duration)}</p>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="text-sm text-muted-foreground">No trailers available</p>
-              )}
             </TabsContent>
           </Tabs>
         </div>
